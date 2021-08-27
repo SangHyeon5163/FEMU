@@ -1,6 +1,7 @@
 #include "ftl.h"
 
-//#define FEMU_DEBUG_FTL
+#define FEMU_DEBUG_FTL
+struct buff buff; 
 
 static void *ftl_thread(void *arg);
 
@@ -349,6 +350,18 @@ static void ssd_init_maptbl(struct ssd *ssd)
     }
 }
 
+#if 0 //NAM
+static void ssd_init_buff_maptbl(struct ssd *ssd)
+{ 
+	struct ssdparams *spp = &ssd->sp; 
+
+	ssd->buff_maptbl = g_malloc0(sizeof(struct ppa) * spp->tt_pgs); 
+	for (int i = 0; i < spp->tt_pgs; i++) { 
+		ssd->buff_maptbl[i].ppa = UNMAPPED_PPA; 
+	} 
+} 
+#endif 
+
 static void ssd_init_rmap(struct ssd *ssd)
 {
     struct ssdparams *spp = &ssd->sp;
@@ -358,6 +371,17 @@ static void ssd_init_rmap(struct ssd *ssd)
         ssd->rmap[i] = INVALID_LPN;
     }
 }
+
+#if 1 //NAM
+static void buff_init(void)
+{ 
+	//buff = (struct buff*)malloc(sizeof(struct buff)); 
+	
+	buff.tot_cnt = 0; 
+	buff.head = NULL; 
+	buff.tail = NULL;
+}
+#endif 
 
 void ssd_init(FemuCtrl *n)
 {
@@ -377,6 +401,11 @@ void ssd_init(FemuCtrl *n)
     /* initialize maptbl */
     ssd_init_maptbl(ssd);
 
+#if 0 //NAM
+	/* initialize buff_maptbl */
+	ssd_init_buff_maptbl(ssd); 
+#endif
+
     /* initialize rmap */
     ssd_init_rmap(ssd);
 
@@ -385,6 +414,9 @@ void ssd_init(FemuCtrl *n)
 
     /* initialize write pointer, this is how we allocate new pages for writes */
     ssd_init_write_pointer(ssd);
+
+	/* initialize write buffer */
+	buff_init(); 
 
     qemu_thread_create(&ssd->ftl_thread, "FEMU-FTL-Thread", ftl_thread, n,
                        QEMU_THREAD_JOINABLE);
@@ -758,6 +790,27 @@ static int do_gc(struct ssd *ssd, bool force)
     return 0;
 }
 
+#if 0 //NAM
+static int64_t buff_caching_check(struct ssd *ssd, uint64_t lpn) 
+{
+	struct ppa ppa = ssd->buff_maptbl[lpn]; 
+	uint64_t sublat, maxlat = 0; 
+
+	if (ppa == UNMAPPED_PPA) { 
+		return -1; 
+	} else { 
+		struct nand_cmd srd; 
+		srd.type = USER_IO;
+		srd.cmd = NAND_READ; 
+		srd.stime = req->stime; 
+		sublat = ssd_advance_status(ssd, &ppa, &srd); 
+		maxlat = (sublat > maxlat) ? sublat : maxlat;
+	}
+
+	return maxlat; 
+}
+#endif
+
 static uint64_t ssd_read(struct ssd *ssd, NvmeRequest *req)
 {
     struct ssdparams *spp = &ssd->sp;
@@ -772,6 +825,14 @@ static uint64_t ssd_read(struct ssd *ssd, NvmeRequest *req)
     if (end_lpn >= spp->tt_pgs) {
         ftl_err("start_lpn=%"PRIu64",tt_pgs=%d\n", start_lpn, ssd->sp.tt_pgs);
     }
+	
+	/* exist write buffer IO read path */
+#if 0 //NAM
+	uint64_t ret = buff_caching_check(ssd, lpn);
+	if (ret != -1){
+		return ret; // ret is equal the maxlat
+	} 
+#endif
 
     /* normal IO read path */
     for (lpn = start_lpn; lpn <= end_lpn; lpn++) {
@@ -805,6 +866,9 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
     uint64_t lpn;
     uint64_t curlat = 0, maxlat = 0;
     int r;
+	
+	//debug 
+	//ftl_log("check the debug system1111\n"); 
 
     if (end_lpn >= spp->tt_pgs) {
         ftl_err("start_lpn=%"PRIu64",tt_pgs=%d\n", start_lpn, ssd->sp.tt_pgs);
@@ -849,6 +913,144 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
     return maxlat;
 }
 
+#if 1 //NAM
+
+static int32_t buff_write(struct ssd *ssd, NvmeRequest *req)
+{ 
+	struct buff_node* newNode = (struct buff_node*)malloc(sizeof(struct buff_node)); 
+	if (!newNode) { 
+		ftl_log("newNode ERR\n");
+		//return -1; 
+	} 
+
+	newNode->req = req;
+	newNode->next = NULL; 
+	
+	// sure ? 
+	if (buff.head == NULL && buff.tail == NULL) { 
+		buff.head = newNode; 
+		buff.tail = newNode; 
+	} else { 
+		newNode->next = buff.head;
+		buff.head->prev = newNode;
+		buff.head = newNode; 
+	}
+
+	buff.tot_cnt++; 
+	//ftl_log("buff.tot_cnt: %d\n", buff.tot_cnt); 
+
+	return 0; 
+} 
+
+static int32_t buff_dequeue(struct ssd *ssd)
+{
+	//uint64_t lat = 0; 
+	NvmeRequest *buff_req;
+	struct buff_node *tmp_node; 
+
+	tmp_node = buff.tail; 
+	buff_req = buff.tail->req;
+	
+	/* send request to flash */
+	//lat = ssd_write(ssd, buff_req);
+	ssd_write(ssd, buff_req); 
+
+//	ftl_log("Is error here?\n");
+	/* move buff's tail pointer */
+//	buff->tail = buff->tail->prev;
+	if (buff.head == buff.tail) { 
+		buff.head = NULL; 
+		buff.tail = NULL; 
+	} else {
+//		ftl_log("In the If~else~\n");
+		buff.tail = buff.tail->prev;
+		buff.tail->next = NULL; 
+	}
+
+	buff.tot_cnt--; 
+	free(tmp_node);
+
+	return 1; 
+}
+
+static void *ftl_thread(void *arg)
+{
+    FemuCtrl *n = (FemuCtrl *)arg;
+    struct ssd *ssd = n->ssd;
+    NvmeRequest *req = NULL;
+    uint64_t lat = 0;
+    int rc;
+    int i;
+	
+	// debug
+	//ftl_log("debug test in ftl_thread\n"); 
+
+    while (!*(ssd->dataplane_started_ptr)) {
+        usleep(100000);
+    }
+
+    /* FIXME: not safe, to handle ->to_ftl and ->to_poller gracefully */
+    ssd->to_ftl = n->to_ftl;
+    ssd->to_poller = n->to_poller;
+
+    while (1) {
+        for (i = 1; i <= n->num_poller; i++) {
+            if (!ssd->to_ftl[i] || !femu_ring_count(ssd->to_ftl[i]))
+                continue;
+
+            rc = femu_ring_dequeue(ssd->to_ftl[i], (void *)&req, 1);
+            if (rc != 1) {
+                printf("FEMU: FTL to_ftl dequeue failed\n");
+            }
+
+			// EUNJI: Determine whether to buffer or flush data 
+			
+
+
+			// EUNJI: Read from / Write to flash memory immediately 
+            ftl_assert(req);
+            switch (req->is_write) {
+            case 1:
+//                lat = ssd_write(ssd, req);
+ 				lat = buff_write(ssd, req); 
+				break;
+            case 0:
+                lat = ssd_read(ssd, req);
+                break;
+            default:
+                ftl_err("FTL received unkown request type, ERROR\n");
+            }
+
+            req->reqlat = lat;
+            req->expire_time += lat;
+
+            rc = femu_ring_enqueue(ssd->to_poller[i], (void *)&req, 1);
+            if (rc != 1) {
+                ftl_err("FTL to_poller enqueue failed\n");
+            }
+
+			/* dequeue some request if buff size full */ 
+			if (req->is_write) { 
+				if (buff.tot_cnt == BUFF_THRES) { 
+					buff_dequeue(ssd); 
+				}
+			}
+            /* clean one line if needed (in the background) */
+            if (should_gc(ssd)) {
+                do_gc(ssd, false);
+            }
+        }
+    }
+
+    return NULL;
+}
+
+int16_t get_buff_tot_cnt(void)
+{
+	return buff.tot_cnt;
+}	
+#endif
+#if 0
 static void *ftl_thread(void *arg)
 {
     FemuCtrl *n = (FemuCtrl *)arg;
@@ -905,4 +1107,5 @@ static void *ftl_thread(void *arg)
 
     return NULL;
 }
+#endif
 

@@ -52,6 +52,12 @@ enum {
 #define LUN_BITS    (8)
 #define CH_BITS     (7)
 
+#if 1 //NAM 
+/* things that buffer needed */ 
+#define BUFF_THRES 1024
+
+#endif
+
 /* describe a physical page addr */
 struct ppa {
     union {
@@ -199,7 +205,10 @@ struct ssd {
     struct ssdparams sp;
     struct ssd_channel *ch;
     struct ppa *maptbl; /* page level mapping table */
-    uint64_t *rmap;     /* reverse mapptbl, assume it's stored in OOB */
+#if 1 //NAM
+	struct ppa *buff_maptbl; /* just using check buff */
+#endif
+	uint64_t *rmap;     /* reverse mapptbl, assume it's stored in OOB */
     struct write_pointer wp;
     struct line_mgmt lm;
 
@@ -210,8 +219,22 @@ struct ssd {
     QemuThread ftl_thread;
 };
 
-void ssd_init(FemuCtrl *n);
+#if 1 //NAM
+struct buff_node {
+	NvmeRequest *req;
+	struct buff_node *prev; 
+	struct buff_node *next;
+}; 
 
+struct buff { 
+	uint32_t tot_cnt;
+	struct buff_node *head; 
+	struct buff_node *tail; 
+};
+#endif 
+
+void ssd_init(FemuCtrl *n);
+int16_t get_buff_tot_cnt(void);
 #ifdef FEMU_DEBUG_FTL
 #define ftl_debug(fmt, ...) \
     do { printf("[FEMU] FTL-Dbg: " fmt, ## __VA_ARGS__); } while (0)
