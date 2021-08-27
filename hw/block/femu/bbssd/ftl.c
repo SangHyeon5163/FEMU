@@ -1,6 +1,6 @@
 #include "ftl.h"
 
-//#define FEMU_DEBUG_FTL
+#define FEMU_DEBUG_FTL
 
 static void *ftl_thread(void *arg);
 
