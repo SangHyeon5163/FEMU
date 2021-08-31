@@ -6,7 +6,7 @@
 #define INVALID_PPA     (~(0ULL))
 #define INVALID_LPN     (~(0ULL))
 #define UNMAPPED_PPA    (~(0ULL))
-
+#define WRITE_ON_BUFF	(UINT64_MAX-1)
 enum {
     NAND_READ =  0,
     NAND_WRITE = 1,

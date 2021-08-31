@@ -29,10 +29,8 @@ static inline void set_maptbl_ent(struct ssd *ssd, uint64_t lpn, struct ppa *ppa
 #if 1 //NAM
 static inline void set_btbl_ent(struct ssd *ssd, uint64_t lpn, struct ppa *ppa)
 { 
-	ftl_assert(lpn < ssd->sp.tt_pgs);
-//	ftl_log("%lld  %ld  %ld    1\n",UNMAPPED_PPA,WRITE_ON_BUFF,ssd->maptbl[lpn].ppa); 
-	ssd->maptbl[lpn].ppa = WRITE_ON_BUFF;	
-//	ftl_log("%lld  %ld  %ld    2\n",UNMAPPED_PPA,WRITE_ON_BUFF,ssd->maptbl[lpn].ppa); 
+	ftl_assert(lpn < ssd->sp.tt_pgs); 
+	ssd->maptbl[lpn] = WRITE_ON_BUFF;
 }
 #endif
 
@@ -460,14 +458,7 @@ static inline bool mapped_ppa(struct ppa *ppa)
     return !(ppa->ppa == UNMAPPED_PPA);
 }
 
-#if 1 //NAM
-static inline bool mapped_buff(struct ppa *ppa)
-{ 
-	return !(ppa->ppa == WRITE_ON_BUFF); 
-} 
-#endif
-
-static inline struct ssd_channel *get_ch(struct ssd *ssd, struct ppa *ppa)
+static inline strut ssd_channel *get_ch(struct ssd *ssd, struct ppa *ppa)
 {
     return &(ssd->ch[ppa->g.ch]);
 }
@@ -859,10 +850,8 @@ static uint64_t ssd_read(struct ssd *ssd, NvmeRequest *req)
             //printf("Invalid ppa,ch:%d,lun:%d,blk:%d,pl:%d,pg:%d,sec:%d\n",
             //ppa.g.ch, ppa.g.lun, ppa.g.blk, ppa.g.pl, ppa.g.pg, ppa.g.sec);
             continue;
-        } else if (!mapped_buff(&ppa)) { 
-			/* if the data is located in buff, latency is zero */
-			continue; 	
-		} 
+        }
+
         struct nand_cmd srd;
         srd.type = USER_IO;
         srd.cmd = NAND_READ;
@@ -909,11 +898,9 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
             set_rmap_ent(ssd, INVALID_LPN, &ppa);
         }
 #endif
-#if 1 //NAM
-       	if (mapped_buff(&ppa)) { 
+       	if (ppa != WRITE_ON_BUFF) { 
 			ftl_log("Something error occurs in ssd_write().\n");
 		}
-#endif
 		/* new write */
         ppa = get_new_page(ssd);
         /* update maptbl */
@@ -941,16 +928,14 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
 #if 1 //NAM
 
 static int32_t buff_write(struct ssd *ssd, NvmeRequest *req)
-{
-#if 1 //NAM
+{ 
 	uint64_t lba = req->slba; 
 	struct ssdparams *spp = &ssd->sp; 	
 	int len = req->nlb; 
 	uint64_t start_lpn = lba / spp->secs_per_pg; 
 	uint64_t end_lpn = (lba + len - 1) / spp->secs_per_pg; 
 	struct ppa ppa; 
-	uint64_t lpn;
-#endif 
+	uint64_t lpn; 
 	struct buff_node* newNode = (struct buff_node*)malloc(sizeof(struct buff_node)); 
 	if (!newNode) { 
 		ftl_log("newNode ERR\n");
@@ -971,29 +956,21 @@ static int32_t buff_write(struct ssd *ssd, NvmeRequest *req)
 	}
 
 	buff.tot_cnt++; 
-	ftl_log("buff.tot_cnt: %d\n", buff.tot_cnt);
+	//ftl_log("buff.tot_cnt: %d\n", buff.tot_cnt);
 
-#if 1 //NAM
 	/* update mapping information */
 	for (lpn = start_lpn; lpn <= end_lpn; lpn++) {
-		ftl_log("test 1\n"); 
 		ppa = get_maptbl_ent(ssd, lpn); 
 		if (mapped_ppa(&ppa)) { 
 			/* update old page information first */
-			if (!mapped_buff(&ppa)) {
-				goto here;
-			}
-			ftl_log("test 2\n");
-			mark_page_invalid(ssd, &ppa);
-			ftl_log("test 3\n");
+			mark_page_invalid(ssd, &ppa); 
 			set_rmap_ent(ssd, INVALID_LPN, &ppa); 
 		} 
-here: 
-		ftl_log("test 4\n"); 
+
 		/* update maptbl with WRITE_ON_BUFF flag */
 		set_btbl_ent(ssd, lpn, &ppa);
 	}
-#endif
+
 	return 0; 
 } 
 
