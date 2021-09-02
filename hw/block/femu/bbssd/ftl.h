@@ -7,6 +7,12 @@
 #define INVALID_LPN     (~(0ULL))
 #define UNMAPPED_PPA    (~(0ULL))
 #define WRITE_ON_BUFF	(UINT64_MAX-1)
+
+#define PAGESIZE 4096
+#define _PME (PAGESIZE/8) //per page mapping entries uint64_t
+#define _PMES 9 //calculate mapping index with unit of pages
+
+
 enum {
     NAND_READ =  0,
     NAND_WRITE = 1,
@@ -146,6 +152,7 @@ struct ssdparams {
     int pgs_per_lun;  /* # of pages per LUN (Die) */
     int pgs_per_ch;   /* # of pages per channel */
     int tt_pgs;       /* total # of pages in the SSD */
+	int dirty_check_entries; /* # of pages in the maptbl */
 
     int blks_per_lun; /* # of blocks per LUN */
     int blks_per_ch;  /* # of blocks per channel */
@@ -206,6 +213,7 @@ struct ssd {
     struct ssd_channel *ch;
     struct ppa *maptbl; /* page level mapping table */
 #if 1 //NAM
+	unsigned char *dirty_check; /* checked mapping table's dirty condition */ 
 	struct ppa *buff_maptbl; /* just using check buff */
 #endif
 	uint64_t *rmap;     /* reverse mapptbl, assume it's stored in OOB */
@@ -220,16 +228,40 @@ struct ssd {
 };
 
 #if 1 //NAM
+struct node_dirty { 
+	uint64_t idx; 
+	struct node_dirty *next;
+};
+
+struct element { 
+	uint64_t idx; 
+	uint64_t count; 
+};
+
+struct ht { 
+	struct element *heap; 
+	uint64_t heap_size; 
+};
+
 struct buff_node {
 	NvmeRequest *req;
-	struct buff_node *prev; 
+	uint64_t lba; 
+	//struct buff_node *prev; 
 	struct buff_node *next;
 }; 
 
+struct bucket { 
+	struct buff_node *head; 
+	uint64_t idx; 
+	uint64_t count; 
+	uint64_t heap_idx; 
+};
+
 struct buff { 
 	uint32_t tot_cnt;
-	struct buff_node *head; 
-	struct buff_node *tail; 
+	struct bucket* htable; 
+	//struct buff_node *head; 
+	//struct buff_node *tail; 
 };
 #endif 
 

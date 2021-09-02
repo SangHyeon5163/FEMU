@@ -1,7 +1,13 @@
 #include "ftl.h"
 
+unsigned char dirty_option = 0x1; 
+unsigned char node_dirty_option = 0x2; 
+unsigned char heap_option = 0x4; 
+
 #define FEMU_DEBUG_FTL
 struct buff buff; 
+struct node_dirty *dHead = NULL; 
+struct ht h; 
 
 static void *ftl_thread(void *arg);
 
@@ -270,6 +276,7 @@ static void ssd_init_params(struct ssdparams *spp)
     spp->pgs_per_lun = spp->pgs_per_pl * spp->pls_per_lun;
     spp->pgs_per_ch = spp->pgs_per_lun * spp->luns_per_ch;
     spp->tt_pgs = spp->pgs_per_ch * spp->nchs;
+	spp->dirty_check_entries = spp->tt_pgs / _PME;
 
     spp->blks_per_lun = spp->blks_per_pl * spp->pls_per_lun;
     spp->blks_per_ch = spp->blks_per_lun * spp->luns_per_ch;
@@ -383,13 +390,31 @@ static void ssd_init_rmap(struct ssd *ssd)
 }
 
 #if 1 //NAM
-static void buff_init(void)
+static void buff_init(struct ssd *ssd)
 { 
 	//buff = (struct buff*)malloc(sizeof(struct buff)); 
 	
-	buff.tot_cnt = 0; 
-	buff.head = NULL; 
-	buff.tail = NULL;
+	//buff.tot_cnt = 0; 
+	//buff.head = NULL; 
+	//buff.tail = NULL;
+	/* dawid buff initialize */
+	struct ssdparams *spp = &ssd->sp; 
+	/* dawid buffer */
+	buff.htable = (struct bucket*)malloc(spp->dirty_check_entries*sizeof(struct bucket)); 
+	/* map dirty check entry */
+	ssd->dirty_check = (unsigned char*)malloc(sizeof(unsigned char)*spp->dirty_check_entries); 
+
+	for (uint64_t i = 0; i < spp->dirty_check_entries; i++) { 
+		buff.htable[i].idx = i;
+		buff.htable[i].count = 0;
+
+		ssd->dirty_check[i] = 0; 
+	}
+
+	h.heap = (struct element*)malloc(spp->dirty_check_entries*sizeof(struct element)); 
+	h.heap_size = 0; 
+
+	return; 
 }
 #endif 
 
@@ -426,7 +451,7 @@ void ssd_init(FemuCtrl *n)
     ssd_init_write_pointer(ssd);
 
 	/* initialize write buffer */
-	buff_init(); 
+	buff_init(ssd); 
 
     qemu_thread_create(&ssd->ftl_thread, "FEMU-FTL-Thread", ftl_thread, n,
                        QEMU_THREAD_JOINABLE);
@@ -939,10 +964,10 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
 }
 
 #if 1 //NAM
-
+#if 0 //NAM 
 static int32_t buff_write(struct ssd *ssd, NvmeRequest *req)
 {
-#if 1 //NAM
+#if 1 //ORG_PFTL
 	uint64_t lba = req->slba; 
 	struct ssdparams *spp = &ssd->sp; 	
 	int len = req->nlb; 
@@ -996,7 +1021,245 @@ here:
 #endif
 	return 0; 
 } 
+#endif 
+#if 1 //David
+static uint64_t find_idx(uint64_t lba)
+{ 
+	/* find index on map table page associated with lpn */ 
+	return lba >> _PMES; 
+} 
 
+static void insert_max_heap(struct element element)
+{ 
+	int i; 
+	i = ++(h.heap_size); 
+
+	while ((i != 1) && (element.count > h.heap[i/2].count)) { 
+		h.heap[i] = h.heap[i/2]; 
+		i /= 2; 
+	}
+	h.heap[i] = element;
+
+	return; 
+}
+
+static void search_heap(struct ssd *ssd, uint64_t idx)
+{
+	uint64_t i = 1; 
+	struct element tmp;
+	struct ssdparams *spp = &ssd->sp; 
+
+	while (h.heap[i].idx != idx) { 
+		i++; 
+		if (i == spp->dirty_check_entries) { 
+			struct element newElement; 
+
+			newElement.idx = idx; 
+			newElement.count = 1; 
+
+			insert_max_heap(newElement); 
+
+			return; 
+		}
+	}
+
+	h.heap[i].count++; 
+
+	if (h.heap[i].count > h.heap[i/2].count) { 
+		tmp = h.heap[i]; 
+
+		while ((i != 1) && (h.heap[i].count > h.heap[i/2].count)) { 
+			h.heap[i] = h.heap[i/2]; 
+			i /= 2; 
+		} 
+		h.heap[i] = tmp; 
+	}
+
+	return; 
+}
+
+static void delete_max_heap(void) 
+{
+	uint64_t parent, child; 
+	struct element temp; 
+
+//	item = h.heap[1]; 
+	if (h.heap_size == 0)
+		return; 
+
+	temp = h.heap[(h.heap_size)--]; 
+	parent = 1;
+	child = 2; 
+
+	while (child <= h.heap_size) {
+		if ((child < h.heap_size) && ((h.heap[child].count) < h.heap[child + 1].count)) 
+			child++; 
+
+		if (temp.count >= h.heap[child].count)
+			break; 
+
+		h.heap[parent] = h.heap[child];
+		parent = child; 
+		child *= 2; 
+	}
+
+	h.heap[parent] = temp;
+	return; 
+}
+
+static int32_t is_page_dirty(struct ssd *ssd, uint64_t idx) 
+{ 
+	if(ssd->dirty_check[idx] & dirty_option)
+		return 1; 
+
+	return 0; 
+}
+
+static void pageIsDirty(struct ssd *ssd, uint64_t idx)
+{ 
+	if(ssd->dirty_check[idx] & node_dirty_option)
+		return; 
+
+	ssd->dirty_check[idx] |= node_dirty_option; 
+	struct node_dirty* newNode = (struct node_dirty*)malloc(sizeof(struct node_dirty)); 
+	newNode->idx = idx; 
+	newNode->next = dHead; 
+	dHead = newNode; 
+
+	return; 
+} 
+
+static void pageIsClean(struct ssd *ssd, uint64_t idx)
+{
+	if (buff.htable[idx].count != 0) { 
+		search_heap(ssd, idx); 
+	} else { 
+		struct element newElement; 
+
+		newElement.idx = idx; 
+		newElement.count = 1; 
+
+		insert_max_heap(newElement); 
+	} 
+
+	return; 
+}
+
+static int32_t buff_write(struct ssd *ssd, NvmeRequest *req)
+{ 
+	/* Assumed that the size of the request is always requested in units of page */
+	/* if the assumtions change, you should re-check the buff behavior */ 
+	uint64_t lba = req->slba;
+	struct ssdparams *spp = &ssd->sp; 
+	int len = req->nlb; 
+	uint64_t start_lpn = lba / spp->secs_per_pg;
+	uint64_t end_lpn = (lba + len - 1) / spp->secs_per_pg; 
+	struct ppa ppa; 
+	uint64_t lpn; 
+	
+	/* find map index */
+	uint64_t idx = find_idx(lba);
+	ftl_log("test 1\n"); 
+
+	/* check map page condition */
+	if (is_page_dirty(ssd, idx)) {
+		ftl_log(""); 
+		pageIsDirty(ssd, idx);
+	} else { 
+		pageIsClean(ssd, idx); 
+	}
+	ftl_log("test 2\n"); 
+
+	/* allocate new node for dawid buff */ 
+	struct buff_node* newNode = (struct buff_node*)malloc(sizeof(struct buff_node)); 
+	if (!newNode) { 
+		ftl_log("newNode ERR\n"); 
+	}
+
+	newNode->req = req; 
+	newNode->lba = lba; 
+	newNode->next = NULL; 
+
+	if(buff.htable[idx].count > 0)
+		newNode->next = buff.htable[idx].head; 
+	
+	buff.htable[idx].head = newNode; 
+	buff.htable[idx].count++; 
+	buff.tot_cnt++; 
+	ftl_log("test 3 buff.tot_cnt: %d\n", buff.tot_cnt);
+
+	/* update mapping information */
+	for (lpn = start_lpn; lpn <= end_lpn; lpn++) { 
+		ppa = get_maptbl_ent(ssd, lpn); 
+		if (mapped_ppa(&ppa)) { 
+			/* update old page information first */
+			if (!mapped_buff(&ppa)) { 
+				goto here; 
+			}
+			mark_page_invalid(ssd, &ppa); 
+			set_rmap_ent(ssd, INVALID_LPN, &ppa); 
+		}
+here:
+		/* update maptbl with WRITE_ON_BUFF flag */ 
+		set_btbl_ent(ssd, lpn, &ppa);
+	}
+
+	return 0; 
+}
+
+static int32_t buff_dequeue(struct ssd *ssd)
+{
+	//NvmeRequest *buff_req; 
+	struct buff_node *tmp_node;
+	struct node_dirty *dNode; 
+	int cmax = -1, imax = -1; 
+
+	while (dHead != NULL) {
+		dNode = dHead; 
+		cmax = buff.htable[dNode->idx].count; 
+		imax = dNode->idx; 
+
+		buff.htable[imax].count -= cmax; 
+		buff.tot_cnt -= cmax; 
+
+		while (buff.htable[imax].head != NULL) { 
+			tmp_node = buff.htable[imax].head;
+			/* Send request from dram buffer to nand flash */
+			ssd_write(ssd, tmp_node->req);
+			buff.htable[imax].head = tmp_node->next; 
+			free(tmp_node); 
+		} 
+		dHead = dNode->next; 
+		free(dNode); 
+	}
+	
+	if (h.heap_size >= 1) { 
+		cmax = h.heap[1].count;
+		imax = h.heap[1].idx; 
+
+		if (buff.htable[imax].count == 0) { 
+			delete_max_heap(); 
+			cmax = h.heap[1].count; 
+			imax = h.heap[1].idx; 
+		}
+		buff.htable[imax].count = 0; 
+		buff.tot_cnt -= cmax; 
+
+		while (buff.htable[imax].head != NULL) { 
+			tmp_node = buff.htable[imax].head; 
+			ssd_write(ssd, tmp_node->req); 
+			buff.htable[imax].head = tmp_node->next; 
+			free(tmp_node); 
+		} 
+		delete_max_heap(); 
+		return imax; 
+	} 
+
+	return -1; 
+}
+#endif
+
+#if 0 //NAM
 static int32_t buff_dequeue(struct ssd *ssd)
 {
 	//uint64_t lat = 0; 
@@ -1027,7 +1290,7 @@ static int32_t buff_dequeue(struct ssd *ssd)
 
 	return 1; 
 }
-
+#endif
 static void *ftl_thread(void *arg)
 {
     FemuCtrl *n = (FemuCtrl *)arg;
@@ -1087,7 +1350,10 @@ static void *ftl_thread(void *arg)
 			/* dequeue some request if buff size full */ 
 			if (req->is_write) { 
 				if (buff.tot_cnt == BUFF_THRES) { 
-					buff_dequeue(ssd); 
+					int32_t fidx = buff_dequeue(ssd); 
+					if (fidx < 0) { 
+						ftl_log("buff dequeue error..\n"); 
+					}
 				}
 			}
             /* clean one line if needed (in the background) */
