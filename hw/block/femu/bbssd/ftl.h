@@ -29,7 +29,7 @@ enum {
 
     PG_FREE = 0,
     PG_INVALID = 1,
-    PG_VALID = 2
+    PG_VALID = 2,
 };
 
 enum {
@@ -52,6 +52,17 @@ enum {
 #define LUN_BITS    (8)
 #define CH_BITS     (7)
 
+#define IN_CMT          (1)
+#define NOT_IN_CMT      (0)
+#define MODIFIED        (1)
+#define NOT_MODIFIED    (0)
+#define MAX_INCMT       (100)
+
+#define DATA_PAGE           (0)
+#define TRANSLATION_PAGE    (1)
+#define DATA_BLOCK          (0)
+#define TRANSLATION_BLOCK   (1)
+
 /* describe a physical page addr */
 struct ppa {
     union {
@@ -69,21 +80,35 @@ struct ppa {
     };
 };
 
+struct GTD_entry {
+    int inCMT;              /* the page that this GTD_entry pointing is in CMT or not */
+    int modified;           /* the page that this GTD_entry pointing is modified or not in CMT*/
+    uint64_t *map_page;     /* pointing 1 page of maptbl*/
+};
+
+struct GTD {
+    struct GTD_entry *GTD_entries;      /* GTD entries */
+    int max_inCMT;                      /* max page counts of CMT */
+    int current_inCMT;                  /* current page counts of CMT */
+};
+
 typedef int nand_sec_status_t;
 
 struct nand_page {
     nand_sec_status_t *sec;
     int nsecs;
     int status;
+    int data_or_map;
 };
 
 struct nand_block {
     struct nand_page *pg;
     int npgs;
-    int ipc; /* invalid page count */
-    int vpc; /* valid page count */
+    int ipc; /* invalid data or translation page count */
+    int vpc; /* valid data or translationpage count */
     int erase_cnt;
     int wp; /* current write pointer */
+    int data_or_map;    /* data block or translation block */
 };
 
 struct nand_plane {
@@ -168,11 +193,19 @@ typedef struct line {
 /* wp: record next write addr */
 struct write_pointer {
     struct line *curline;
+    struct line *Tcurline;
+
     int ch;
     int lun;
     int pg;
     int blk;
     int pl;
+
+    int Tch;
+    int Tlun;
+    int Tpg;
+    int Tblk;
+    int Tpl;    /* represent current translation block location */
 };
 
 struct line_mgmt {
@@ -199,9 +232,11 @@ struct ssd {
     struct ssdparams sp;
     struct ssd_channel *ch;
     struct ppa *maptbl; /* page level mapping table */
+    struct GTD *GTD;      /* Global Translation Directory - 1 entry indicate 1 page of maptbl */
     uint64_t *rmap;     /* reverse mapptbl, assume it's stored in OOB */
     struct write_pointer wp;
     struct line_mgmt lm;
+    uint32_t page_size;
 
     /* lockless ring for communication with NVMe IO thread */
     struct rte_ring **to_ftl;
