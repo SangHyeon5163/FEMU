@@ -477,15 +477,80 @@ static void ssd_init_DFTL_map(struct ssd *ssd)
     uint64_t mapEntry_per_page = (ssd->page_size /sizeof(struct ppa));      /* mapEntry per page = mapEntry per GTD entry = page_size / sizeof(struct ppa) */
     uint64_t map_table_tt_pgs = GTD_entry_count * mapEntry_per_page;        /* total page of entire map table */
     struct ppa ppa;
-    uint64_t count;
+    uint64_t count = 0;
    
-    for (int i = 0; i < map_table_tt_pgs; i++) {
-        ppa = get_new_translation_page(ssd);                /* get new translation page from wpp->Tch, Tlun ... */
-        count = count / mapEntry_per_page;                  /* for set translation rmap */
-        mark_translation_page_valid(ssd, &ppa);             /* mark translation page valid, set TRANSLATION_PAGE, TRANSLATION_BLOCK, vpc ... */
-        ssd_init_translation_rmap(ssd, &ppa, count);        /* rmap set every time the translation page is flushed */
-        ssd_advance_translation_write_pointer(ssd);         /* advance translation write pointer using wpp->Tcp, Tlun ... */
+    for (int i = 0; i < map_table_tt_pgs; i++) {       
+        ppa = get_new_translation_page(ssd);                    /* get new translation page from wpp->Tch, Tlun ... */
+        if (count % mapEntry_per_page == 0)
+        {
+            count = count / mapEntry_per_page;                  /* count for GTD_entries index */
+            ssd->GTD->GTD_entries[count].map_page_ppa = ppa;    /* set ppa of map table */    
+        }   
+        mark_translation_page_valid(ssd, &ppa);                 /* mark translation page valid, set TRANSLATION_PAGE, TRANSLATION_BLOCK, vpc ... */
+        ssd_init_translation_rmap(ssd, &ppa, count);            /* rmap set every time the translation page is flushed */
+        ssd_advance_translation_write_pointer(ssd);             /* advance translation write pointer using wpp->Tcp, Tlun ... */
     }
+}
+
+static void ssd_init_LRU(struct ssd *ssd)
+{   
+    ssd->GTD->LRU_list = g_malloc0(sizeof(struct dll));
+
+    ssd->GTD->LRU_list->head = g_malloc0(sizeof(struct dll_entry));
+    ssd->GTD->LRU_list->tail = g_malloc0(sizeof(struct dll_entry));
+    
+    ssd->GTD->LRU_list->head->GTD_index = -1;
+    ssd->GTD->LRU_list->tail->GTD_index = -1;
+
+    ssd->GTD->LRU_list->head->prev = NULL;
+    ssd->GTD->LRU_list->head->next = ssd->GTD->LRU_list->tail;
+    ssd->GTD->LRU_list->tail->prev = ssd->GTD->LRU_list->head;
+    ssd->GTD->LRU_list->tail->next = NULL;
+}
+
+static void append_LRU(struct ssd *ssd, uint64_t GTD_index)
+{
+    int check = 1;
+    struct dll_entry *new_entry;
+    for(struct dll_entry *entry = ssd->GTD->LRU_list->head; entry->next != NULL; entry = entry->next )
+    {
+        if(entry->GTD_index == GTD_index) 
+        {
+            (entry->prev)->next = entry->next;
+            (entry->next)->prev = entry->prev;
+            (ssd->GTD->LRU_list->head->next)->prev = entry;
+            entry->next = ssd->GTD->LRU_list->head->next;
+            ssd->GTD->LRU_list->head->next = entry;
+            entry->prev = sd->GTD->LRU_list->head;
+            check = 0;
+            break;
+        }
+    }
+    if(check)
+    {
+        new_entry = g_malloc0(sizeof(struct dll_entry));
+        new_entry->GTD_index = GTD_index;
+
+        (ssd->GTD->LRU_list->head->next)->prev = new_entry;
+        new_entry->next = ssd->GTD->LRU_list->head->next;
+        ssd->GTD->LRU_list->head->next = new_entry;
+        new_entry->prev = sd->GTD->LRU_list->head;
+
+        ssd->GTD->current_inCMT++;
+    }
+}
+
+static int victim_LRU(struct ssd *ssd)
+{
+    struct dll_entry *victim_entry = ssd->GTD->LRU_list->tail->prev;
+    int victim_index = victim_entry->GTD_index;
+ 
+    victim_entry->next = ssd->GTD->LRU_list->tail;
+    ssd->GTD->LRU_list->tail->prev = victim_entry->prev;
+    ssd->GTD->current_inCMT--;
+
+    free(victim_entry);
+    return victim_index;
 }
 
 static void ssd_init_DFTL(struct ssd *ssd)
@@ -493,6 +558,7 @@ static void ssd_init_DFTL(struct ssd *ssd)
     ssd_init_DFTL_GTD(ssd);
     ssd_init_DFTL_write_pointer(ssd);
     ssd_init_DFTL_map(ssd);
+    ssd_init_LRU(ssd);
 }   
 
 void ssd_init(FemuCtrl *n)
@@ -1028,12 +1094,15 @@ static uint64_t ssd_address_translation(struct ssd *ssd, NvmeRequest *req)
 
     uint64_t mapEntry_per_page = (ssd->page_size /sizeof(struct ppa));      /* mapEntry per page = mapEntry per GTD entry = page_size / sizeof(struct ppa) */
     uint64_t GTD_index;
+    uint64_t map_offset;
+    int victim_index;
 
     if (end_lpn >= spp->tt_pgs) {
         ftl_err("start_lpn=%"PRIu64",tt_pgs=%d\n", start_lpn, ssd->sp.tt_pgs);
     }
 
     for (lpn = start_lpn; lpn <= end_lpn; lpn++) {
+        map_offset = lpn % mapEntry_per_page;
         GTD_index = lpn / mapEntry_per_page;
 
         if (ssd->GTD->GTD_entries[GTD_index].inCMT == IN_CMT) {
@@ -1041,24 +1110,74 @@ static uint64_t ssd_address_translation(struct ssd *ssd, NvmeRequest *req)
         }
         
         if (ssd->GTD->current_inCMT < ssd->GTD->max_inCMT) {
+            append_LRU(ssd, GTD_index);
+            ssd->GTD->GTD_entries[GTD_index].inCMT = IN_CMT;
 
+            ppa = ssd->GTD->GTD_entries[GTD_index].map_page_ppa;
+            struct nand_cmd srd;
+            srd.type = USER_IO;
+            srd.cmd = NAND_READ;
+            srd.stime = req->stime;
+            curlat = ssd_advance_status(ssd, &ppa, &srd);
+            maxlat = (curlat > maxlat) ? curlat : maxlat;
+
+            return maxlat;
         }
 
-        // LRU 알고리즘 필요
+        victim_index = victim_LRU(ssd);
+        ssd->GTD->GTD_entries[victim_index].inCMT = NOT_IN_CMT;
 
-        if ()
+        if (ssd->GTD->GTD_entries[victim_index].modified = NOT_MODIFIED)
+        {
+            append_LRU(ssd, GTD_index);
+            ssd->GTD->GTD_entries[GTD_index].inCMT = IN_CMT;
 
+            ppa = ssd->GTD->GTD_entries[GTD_index].map_page_ppa;
+            struct nand_cmd srd;
+            srd.type = USER_IO;
+            srd.cmd = NAND_READ;
+            srd.stime = req->stime;
+            curlat = ssd_advance_status(ssd, &ppa, &srd);
+            maxlat = (curlat > maxlat) ? curlat : maxlat;
 
-        /* need to advance the write pointer here */
-        ssd_advance_write_pointer(ssd);
+            return maxlat;
+        }
+
+        ppa = ssd->GTD->GTD_entries[victim_index].map_page_ppa;
+
+        if (mapped_ppa(&ppa)) {
+            mark_page_invalid(ssd, &ppa);
+            set_rmap_ent(ssd, INVALID_LPN, &ppa);
+        }
+
+        ppa = get_new_translation_page(ssd);
+        ssd->GTD->GTD_entries[victim_index].map_page_ppa = ppa;
+        mark_translation_page_valid(ssd, &ppa);
+        set_rmap_ent(ssd, victim_index, &ppa);
+        ssd_advance_translation_write_pointer(ssd);
 
         struct nand_cmd swr;
         swr.type = USER_IO;
         swr.cmd = NAND_WRITE;
         swr.stime = req->stime;
-        /* get latency statistics */
         curlat = ssd_advance_status(ssd, &ppa, &swr);
         maxlat = (curlat > maxlat) ? curlat : maxlat;
+
+        uint64_t temp = maxlat;
+        maxlat = 0;
+
+        append_LRU(ssd, GTD_index);
+        ssd->GTD->GTD_entries[GTD_index].inCMT = IN_CMT;
+
+        ppa = ssd->GTD->GTD_entries[GTD_index].map_page_ppa;
+        struct nand_cmd srd;
+        srd.type = USER_IO;
+        srd.cmd = NAND_READ;
+        srd.stime = req->stime;
+        curlat = ssd_advance_status(ssd, &ppa, &srd);
+        maxlat = (curlat > maxlat) ? curlat : maxlat;
+
+        return maxlat+temp;
     }
 }
 
@@ -1092,10 +1211,12 @@ static void *ftl_thread(void *arg)
             ftl_assert(req);
             switch (req->is_write) {
             case 1:
-                lat = ssd_write(ssd, req);
+                lat = ssd_address_translation(ssd, req);
+                lat += ssd_write(ssd, req);
                 break;
             case 0:
-                lat = ssd_read(ssd, req);
+                lat = ssd_address_translation(ssd, req);
+                lat += ssd_read(ssd, req);
                 break;
             default:
                 ftl_err("FTL received unkown request type, ERROR\n");
