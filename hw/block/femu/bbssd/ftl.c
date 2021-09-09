@@ -4,6 +4,10 @@
 
 static void *ftl_thread(void *arg);
 
+static void mark_translation_page_valid(struct ssd *ssd, struct ppa *ppa);
+
+static uint64_t ssd_address_translation(struct ssd *ssd, NvmeRequest *req, uint64_t lpn);
+
 static inline bool should_gc(struct ssd *ssd)
 {
     return (ssd->lm.free_line_cnt <= ssd->sp.gc_thres_lines);
@@ -457,7 +461,7 @@ static void ssd_init_translation_rmap(struct ssd *ssd, struct ppa *ppa, uint64_t
 static void ssd_init_DFTL_GTD(struct ssd *ssd)
 {
     struct ssdparams *spp = &ssd->sp;
-    uint64_t GTD_entry_count = (sizeof(struct ppa) * spp->tt_pgs) / ssd->page_size);    /* GTD entry count = (sizeof(maptbl) / page_size) */
+    uint64_t GTD_entry_count = ((sizeof(struct ppa) * spp->tt_pgs) / ssd->page_size);    /* GTD entry count = (sizeof(maptbl) / page_size) */
     uint64_t mapEntry_per_page = (ssd->page_size /sizeof(struct ppa));      /* mapEntry per page = mapEntry per GTD entry = page_size / sizeof(struct ppa) */
     
     ssd->GTD->current_inCMT = 0;
@@ -473,7 +477,8 @@ static void ssd_init_DFTL_GTD(struct ssd *ssd)
 
 static void ssd_init_DFTL_map(struct ssd *ssd)
 {
-    uint64_t GTD_entry_count = (sizeof(struct ppa) * spp->tt_pgs) / ssd->page_size);    /* GTD entry count = (sizeof(maptbl) / page_size) */
+    struct ssdparams *spp = &ssd->sp;
+    uint64_t GTD_entry_count = ((sizeof(struct ppa) * spp->tt_pgs) / ssd->page_size);    /* GTD entry count = (sizeof(maptbl) / page_size) */
     uint64_t mapEntry_per_page = (ssd->page_size /sizeof(struct ppa));      /* mapEntry per page = mapEntry per GTD entry = page_size / sizeof(struct ppa) */
     uint64_t map_table_tt_pgs = GTD_entry_count * mapEntry_per_page;        /* total page of entire map table */
     struct ppa ppa;
@@ -521,7 +526,7 @@ static void append_LRU(struct ssd *ssd, uint64_t GTD_index)
             (ssd->GTD->LRU_list->head->next)->prev = entry;
             entry->next = ssd->GTD->LRU_list->head->next;
             ssd->GTD->LRU_list->head->next = entry;
-            entry->prev = sd->GTD->LRU_list->head;
+            entry->prev = ssd->GTD->LRU_list->head;
             check = 0;
             break;
         }
@@ -534,7 +539,7 @@ static void append_LRU(struct ssd *ssd, uint64_t GTD_index)
         (ssd->GTD->LRU_list->head->next)->prev = new_entry;
         new_entry->next = ssd->GTD->LRU_list->head->next;
         ssd->GTD->LRU_list->head->next = new_entry;
-        new_entry->prev = sd->GTD->LRU_list->head;
+        new_entry->prev = ssd->GTD->LRU_list->head;
 
         ssd->GTD->current_inCMT++;
     }
@@ -999,7 +1004,7 @@ static uint64_t ssd_read(struct ssd *ssd, NvmeRequest *req)
     uint64_t start_lpn = lba / spp->secs_per_pg;
     uint64_t end_lpn = (lba + nsecs) / spp->secs_per_pg;
     uint64_t lpn;
-    uint64_t sublat, maxlat = 0;
+    uint64_t sublat = 0, maxlat = 0, translat = 0;
 
     if (end_lpn >= spp->tt_pgs) {
         ftl_err("start_lpn=%"PRIu64",tt_pgs=%d\n", start_lpn, ssd->sp.tt_pgs);
@@ -1007,6 +1012,8 @@ static uint64_t ssd_read(struct ssd *ssd, NvmeRequest *req)
 
     /* normal IO read path */
     for (lpn = start_lpn; lpn <= end_lpn; lpn++) {
+	translat = ssd_address_translation(ssd, req, lpn);
+
         ppa = get_maptbl_ent(ssd, lpn);
         if (!mapped_ppa(&ppa) || !valid_ppa(ssd, &ppa)) {
             //printf("%s,lpn(%" PRId64 ") not mapped to valid ppa\n", ssd->ssdname, lpn);
@@ -1020,6 +1027,7 @@ static uint64_t ssd_read(struct ssd *ssd, NvmeRequest *req)
         srd.cmd = NAND_READ;
         srd.stime = req->stime;
         sublat = ssd_advance_status(ssd, &ppa, &srd);
+	sublat += translat;
         maxlat = (sublat > maxlat) ? sublat : maxlat;
     }
 
@@ -1035,8 +1043,11 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
     uint64_t end_lpn = (lba + len - 1) / spp->secs_per_pg;
     struct ppa ppa;
     uint64_t lpn;
-    uint64_t curlat = 0, maxlat = 0;
+    uint64_t curlat = 0, maxlat = 0, translat = 0;
     int r;
+
+    uint64_t mapEntry_per_page = (ssd->page_size /sizeof(struct ppa));      /* mapEntry per page = mapEntry per GTD entry = page_size / sizeof(struct ppa) */
+    uint64_t GTD_index;
 
     if (end_lpn >= spp->tt_pgs) {
         ftl_err("start_lpn=%"PRIu64",tt_pgs=%d\n", start_lpn, ssd->sp.tt_pgs);
@@ -1050,11 +1061,16 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
     }
 
     for (lpn = start_lpn; lpn <= end_lpn; lpn++) {
+	translat = ssd_address_translation(ssd, req, lpn);
+
         ppa = get_maptbl_ent(ssd, lpn);
         if (mapped_ppa(&ppa)) {
             /* update old page information first */
+	    GTD_index = lpn / mapEntry_per_page;
+	    ssd->GTD->GTD_entries[GTD_index].modified = MODIFIED;
             mark_page_invalid(ssd, &ppa);
             set_rmap_ent(ssd, INVALID_LPN, &ppa);
+	    
         }
 
         /* new write */
@@ -1075,97 +1091,52 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
         swr.stime = req->stime;
         /* get latency statistics */
         curlat = ssd_advance_status(ssd, &ppa, &swr);
+	curlat += translat;
         maxlat = (curlat > maxlat) ? curlat : maxlat;
     }
 
     return maxlat;
 }
 
-static uint64_t ssd_address_translation(struct ssd *ssd, NvmeRequest *req)
+static uint64_t ssd_address_translation(struct ssd *ssd, NvmeRequest *req, uint64_t lpn)
 {
-    uint64_t lba = req->slba;
-    struct ssdparams *spp = &ssd->sp;
-    int len = req->nlb;
-    uint64_t start_lpn = lba / spp->secs_per_pg;
-    uint64_t end_lpn = (lba + len - 1) / spp->secs_per_pg;
+    // struct ssdparams *spp = &ssd->sp;
     struct ppa ppa;
-    uint64_t lpn;
     uint64_t curlat = 0, maxlat = 0;
 
     uint64_t mapEntry_per_page = (ssd->page_size /sizeof(struct ppa));      /* mapEntry per page = mapEntry per GTD entry = page_size / sizeof(struct ppa) */
     uint64_t GTD_index;
-    uint64_t map_offset;
+    // uint64_t map_offset;
     int victim_index;
 
-    if (end_lpn >= spp->tt_pgs) {
-        ftl_err("start_lpn=%"PRIu64",tt_pgs=%d\n", start_lpn, ssd->sp.tt_pgs);
+    // map_offset = lpn % mapEntry_per_page;
+    GTD_index = lpn / mapEntry_per_page;
+
+    if (ssd->GTD->GTD_entries[GTD_index].inCMT == IN_CMT) {		    /* when the map table for address translation is in CMT */
+        return 0;							    /* No additional latency */
     }
+        	
+    if (ssd->GTD->current_inCMT < ssd->GTD->max_inCMT) 			    /* when the map table for address translation is not in CMT */
+    {									    /* but CMT is not full */ 	
+        append_LRU(ssd, GTD_index);					    /* 1 ssd_read needed to fetch the map table for address translation */
+        ssd->GTD->GTD_entries[GTD_index].inCMT = IN_CMT;
 
-    for (lpn = start_lpn; lpn <= end_lpn; lpn++) {
-        map_offset = lpn % mapEntry_per_page;
-        GTD_index = lpn / mapEntry_per_page;
-
-        if (ssd->GTD->GTD_entries[GTD_index].inCMT == IN_CMT) {
-            return 0;
-        }
-        
-        if (ssd->GTD->current_inCMT < ssd->GTD->max_inCMT) {
-            append_LRU(ssd, GTD_index);
-            ssd->GTD->GTD_entries[GTD_index].inCMT = IN_CMT;
-
-            ppa = ssd->GTD->GTD_entries[GTD_index].map_page_ppa;
-            struct nand_cmd srd;
-            srd.type = USER_IO;
-            srd.cmd = NAND_READ;
-            srd.stime = req->stime;
-            curlat = ssd_advance_status(ssd, &ppa, &srd);
-            maxlat = (curlat > maxlat) ? curlat : maxlat;
-
-            return maxlat;
-        }
-
-        victim_index = victim_LRU(ssd);
-        ssd->GTD->GTD_entries[victim_index].inCMT = NOT_IN_CMT;
-
-        if (ssd->GTD->GTD_entries[victim_index].modified = NOT_MODIFIED)
-        {
-            append_LRU(ssd, GTD_index);
-            ssd->GTD->GTD_entries[GTD_index].inCMT = IN_CMT;
-
-            ppa = ssd->GTD->GTD_entries[GTD_index].map_page_ppa;
-            struct nand_cmd srd;
-            srd.type = USER_IO;
-            srd.cmd = NAND_READ;
-            srd.stime = req->stime;
-            curlat = ssd_advance_status(ssd, &ppa, &srd);
-            maxlat = (curlat > maxlat) ? curlat : maxlat;
-
-            return maxlat;
-        }
-
-        ppa = ssd->GTD->GTD_entries[victim_index].map_page_ppa;
-
-        if (mapped_ppa(&ppa)) {
-            mark_page_invalid(ssd, &ppa);
-            set_rmap_ent(ssd, INVALID_LPN, &ppa);
-        }
-
-        ppa = get_new_translation_page(ssd);
-        ssd->GTD->GTD_entries[victim_index].map_page_ppa = ppa;
-        mark_translation_page_valid(ssd, &ppa);
-        set_rmap_ent(ssd, victim_index, &ppa);
-        ssd_advance_translation_write_pointer(ssd);
-
-        struct nand_cmd swr;
-        swr.type = USER_IO;
-        swr.cmd = NAND_WRITE;
-        swr.stime = req->stime;
-        curlat = ssd_advance_status(ssd, &ppa, &swr);
+        ppa = ssd->GTD->GTD_entries[GTD_index].map_page_ppa;
+        struct nand_cmd srd;
+        srd.type = USER_IO;
+        srd.cmd = NAND_READ;
+        srd.stime = req->stime;
+        curlat = ssd_advance_status(ssd, &ppa, &srd);
         maxlat = (curlat > maxlat) ? curlat : maxlat;
 
-        uint64_t temp = maxlat;
-        maxlat = 0;
+	return maxlat;
+    }
 
+    victim_index = victim_LRU(ssd);					    /* CMT is full */
+    ssd->GTD->GTD_entries[victim_index].inCMT = NOT_IN_CMT;		    /* have to victim 1 map table with LRU in CMT */
+
+    if (ssd->GTD->GTD_entries[victim_index].modified == NOT_MODIFIED)	    /* the victim map table has not been modified */
+    {									    /* 1 ssd_read needed to fetch the map table for address translation */
         append_LRU(ssd, GTD_index);
         ssd->GTD->GTD_entries[GTD_index].inCMT = IN_CMT;
 
@@ -1177,9 +1148,49 @@ static uint64_t ssd_address_translation(struct ssd *ssd, NvmeRequest *req)
         curlat = ssd_advance_status(ssd, &ppa, &srd);
         maxlat = (curlat > maxlat) ? curlat : maxlat;
 
-        return maxlat+temp;
+	return maxlat;
     }
+
+    ppa = ssd->GTD->GTD_entries[victim_index].map_page_ppa;		    /* CMT was full and the victim map table was modified */
+									    /* 1 ssd_read and 1 ssd_write needed */
+    if (mapped_ppa(&ppa)) {
+    
+        mark_page_invalid(ssd, &ppa);
+        set_rmap_ent(ssd, INVALID_LPN, &ppa);
+    }									    /* mark victim map table's ppa invalid */
+
+    ppa = get_new_translation_page(ssd);
+    ssd->GTD->GTD_entries[victim_index].map_page_ppa = ppa;
+    mark_translation_page_valid(ssd, &ppa);
+    set_rmap_ent(ssd, victim_index, &ppa);
+    ssd_advance_translation_write_pointer(ssd);				    
+
+    struct nand_cmd swr;
+    swr.type = USER_IO;
+    swr.cmd = NAND_WRITE;
+    swr.stime = req->stime;
+    curlat = ssd_advance_status(ssd, &ppa, &swr);
+    maxlat = (curlat > maxlat) ? curlat : maxlat;			    /* 1 ssd_write needed to flush modified map table to flash memory */
+
+    uint64_t temp = maxlat;
+    maxlat = 0;
+
+    append_LRU(ssd, GTD_index);
+    ssd->GTD->GTD_entries[GTD_index].inCMT = IN_CMT;
+
+    ppa = ssd->GTD->GTD_entries[GTD_index].map_page_ppa;
+    struct nand_cmd srd;
+    srd.type = USER_IO;
+    srd.cmd = NAND_READ;
+    srd.stime = req->stime;
+    curlat = ssd_advance_status(ssd, &ppa, &srd);
+    maxlat = (curlat > maxlat) ? curlat : maxlat;			    /* 1 ssd_read needed to fetch the map table for address translation */
+    maxlat = maxlat + temp;						    /* add read latency with write latency */
+
+    return maxlat;						
 }
+   
+
 
 static void *ftl_thread(void *arg)
 {
@@ -1211,12 +1222,10 @@ static void *ftl_thread(void *arg)
             ftl_assert(req);
             switch (req->is_write) {
             case 1:
-                lat = ssd_address_translation(ssd, req);
-                lat += ssd_write(ssd, req);
+                lat = ssd_write(ssd, req);
                 break;
             case 0:
-                lat = ssd_address_translation(ssd, req);
-                lat += ssd_read(ssd, req);
+                lat = ssd_read(ssd, req);
                 break;
             default:
                 ftl_err("FTL received unkown request type, ERROR\n");

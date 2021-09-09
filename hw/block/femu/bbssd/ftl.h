@@ -83,18 +83,18 @@ struct ppa {
 struct dll {
     struct dll_entry *head;
     struct dll_entry *tail;
-}
+};
 
 struct dll_entry {
     struct dll_entry *prev;
     struct dll_entry *next;
     uint64_t GTD_index;
-}
+};
 
 struct GTD_entry {
     int inCMT;                  /* the page that this GTD_entry pointing is in CMT or not */
     int modified;               /* the page that this GTD_entry pointing is modified or not in CMT*/
-    uint64_t *map_page;         /* pointing 1 page of maptbl*/
+    struct ppa *map_page;         /* pointing 1 page of maptbl*/
     struct ppa map_page_ppa;    /* map page of ppa */
 };
 
