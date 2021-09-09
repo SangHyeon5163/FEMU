@@ -6,7 +6,7 @@
 #define INVALID_PPA     (~(0ULL))
 #define INVALID_LPN     (~(0ULL))
 #define UNMAPPED_PPA    (~(0ULL))
-#define WRITE_ON_BUFF	(UINT64_MAX-1)
+#define INEXIST_BUFF	NULL
 enum {
     NAND_READ =  0,
     NAND_WRITE = 1,
@@ -58,6 +58,20 @@ enum {
 
 #endif
 
+struct buff_node {
+	//NvmeRequest *req;
+	uint64_t lpn;
+	int64_t stime;
+	struct buff_node *prev; 
+	struct buff_node *next;
+}; 
+
+struct buff { 
+	uint32_t tot_cnt;
+	struct buff_node *head; 
+	struct buff_node *tail; 
+};
+
 /* describe a physical page addr */
 struct ppa {
     union {
@@ -73,6 +87,8 @@ struct ppa {
 
         uint64_t ppa;
     };
+// DAWID
+	struct buff_node *buff;
 };
 
 typedef int nand_sec_status_t;
@@ -219,9 +235,11 @@ struct ssd {
     QemuThread ftl_thread;
 };
 
-#if 1 //NAM
+#if 0 //NAM
 struct buff_node {
-	NvmeRequest *req;
+	//NvmeRequest *req;
+	uint64_t lpn;
+	int64_t stime;
 	struct buff_node *prev; 
 	struct buff_node *next;
 }; 

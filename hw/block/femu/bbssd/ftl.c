@@ -27,11 +27,11 @@ static inline void set_maptbl_ent(struct ssd *ssd, uint64_t lpn, struct ppa *ppa
 }
 
 #if 1 //NAM
-static inline void set_btbl_ent(struct ssd *ssd, uint64_t lpn, struct ppa *ppa)
+static inline void set_btbl_ent(struct ssd *ssd, uint64_t lpn, struct ppa *ppa, struct buff_node *node_ptr)
 { 
 	ftl_assert(lpn < ssd->sp.tt_pgs);
 //	ftl_log("%lld  %ld  %ld    1\n",UNMAPPED_PPA,WRITE_ON_BUFF,ssd->maptbl[lpn].ppa); 
-	ssd->maptbl[lpn].ppa = WRITE_ON_BUFF;	
+	ssd->maptbl[lpn].buff = node_ptr;	
 //	ftl_log("%lld  %ld  %ld    2\n",UNMAPPED_PPA,WRITE_ON_BUFF,ssd->maptbl[lpn].ppa); 
 }
 #endif
@@ -357,20 +357,9 @@ static void ssd_init_maptbl(struct ssd *ssd)
     ssd->maptbl = g_malloc0(sizeof(struct ppa) * spp->tt_pgs);
     for (int i = 0; i < spp->tt_pgs; i++) {
         ssd->maptbl[i].ppa = UNMAPPED_PPA;
+		ssd->maptbl[i].buff = INEXIST_BUFF; 
     }
 }
-
-#if 0 //NAM
-static void ssd_init_buff_maptbl(struct ssd *ssd)
-{ 
-	struct ssdparams *spp = &ssd->sp; 
-
-	ssd->buff_maptbl = g_malloc0(sizeof(struct ppa) * spp->tt_pgs); 
-	for (int i = 0; i < spp->tt_pgs; i++) { 
-		ssd->buff_maptbl[i].ppa = UNMAPPED_PPA; 
-	} 
-} 
-#endif 
 
 static void ssd_init_rmap(struct ssd *ssd)
 {
@@ -410,11 +399,6 @@ void ssd_init(FemuCtrl *n)
 
     /* initialize maptbl */
     ssd_init_maptbl(ssd);
-
-#if 0 //NAM
-	/* initialize buff_maptbl */
-	ssd_init_buff_maptbl(ssd); 
-#endif
 
     /* initialize rmap */
     ssd_init_rmap(ssd);
@@ -460,12 +444,16 @@ static inline bool mapped_ppa(struct ppa *ppa)
     return !(ppa->ppa == UNMAPPED_PPA);
 }
 
-#if 1 //NAM
+#if 0 //NAM
 static inline bool mapped_buff(struct ppa *ppa)
 { 
 	return !(ppa->ppa == WRITE_ON_BUFF); 
 } 
 #endif
+static inline bool existed_buff(struct ppa *ppa)
+{ 
+	return !(ppa->buff == INEXIST_BUFF); 
+}
 
 static inline struct ssd_channel *get_ch(struct ssd *ssd, struct ppa *ppa)
 {
@@ -807,27 +795,6 @@ static int do_gc(struct ssd *ssd, bool force)
     return 0;
 }
 
-#if 0 //NAM
-static int64_t buff_caching_check(struct ssd *ssd, uint64_t lpn) 
-{
-	struct ppa ppa = ssd->buff_maptbl[lpn]; 
-	uint64_t sublat, maxlat = 0; 
-
-	if (ppa == UNMAPPED_PPA) { 
-		return -1; 
-	} else { 
-		struct nand_cmd srd; 
-		srd.type = USER_IO;
-		srd.cmd = NAND_READ; 
-		srd.stime = req->stime; 
-		sublat = ssd_advance_status(ssd, &ppa, &srd); 
-		maxlat = (sublat > maxlat) ? sublat : maxlat;
-	}
-
-	return maxlat; 
-}
-#endif
-
 static uint64_t ssd_read(struct ssd *ssd, NvmeRequest *req)
 {
     struct ssdparams *spp = &ssd->sp;
@@ -843,14 +810,6 @@ static uint64_t ssd_read(struct ssd *ssd, NvmeRequest *req)
         ftl_err("start_lpn=%"PRIu64",tt_pgs=%d\n", start_lpn, ssd->sp.tt_pgs);
     }
 	
-	/* exist write buffer IO read path */
-#if 0 //NAM
-	uint64_t ret = buff_caching_check(ssd, lpn);
-	if (ret != -1){
-		return ret; // ret is equal the maxlat
-	} 
-#endif
-
     /* normal IO read path */
     for (lpn = start_lpn; lpn <= end_lpn; lpn++) {
         ppa = get_maptbl_ent(ssd, lpn);
@@ -859,7 +818,7 @@ static uint64_t ssd_read(struct ssd *ssd, NvmeRequest *req)
             //printf("Invalid ppa,ch:%d,lun:%d,blk:%d,pl:%d,pg:%d,sec:%d\n",
             //ppa.g.ch, ppa.g.lun, ppa.g.blk, ppa.g.pl, ppa.g.pg, ppa.g.sec);
             continue;
-        } else if (!mapped_buff(&ppa)) { 
+        } else if (existed_buff(&ppa)) { 
 			/* if the data is located in buff, latency is zero */
 			continue; 	
 		} 
@@ -874,150 +833,63 @@ static uint64_t ssd_read(struct ssd *ssd, NvmeRequest *req)
     return maxlat;
 }
 
-static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
-{
-    uint64_t lba = req->slba;
-    struct ssdparams *spp = &ssd->sp;
-    int len = req->nlb;
-    uint64_t start_lpn = lba / spp->secs_per_pg;
-    uint64_t end_lpn = (lba + len - 1) / spp->secs_per_pg;
-    struct ppa ppa;
-    uint64_t lpn;
-    uint64_t curlat = 0, maxlat = 0;
-    int r;
-	
-	//debug 
-	//ftl_log("check the debug system1111\n"); 
-
-    if (end_lpn >= spp->tt_pgs) {
-        ftl_err("start_lpn=%"PRIu64",tt_pgs=%d\n", start_lpn, ssd->sp.tt_pgs);
-    }
-
-    while (should_gc_high(ssd)) {
-        /* perform GC here until !should_gc(ssd) */
-        r = do_gc(ssd, true);
-        if (r == -1)
-            break;
-    }
-
-    for (lpn = start_lpn; lpn <= end_lpn; lpn++) {
-        ppa = get_maptbl_ent(ssd, lpn);
-#if 0 //NAM
-		if (mapped_ppa(&ppa)) {
-            /* update old page information first */
-            mark_page_invalid(ssd, &ppa);
-            set_rmap_ent(ssd, INVALID_LPN, &ppa);
-        }
-#endif
-#if 1 //NAM
-       	if (mapped_buff(&ppa)) { 
-			ftl_log("Something error occurs in ssd_write().\n");
-		}
-#endif
-		/* new write */
-        ppa = get_new_page(ssd);
-        /* update maptbl */
-        set_maptbl_ent(ssd, lpn, &ppa);
-        /* update rmap */
-        set_rmap_ent(ssd, lpn, &ppa);
-
-        mark_page_valid(ssd, &ppa);
-
-        /* need to advance the write pointer here */
-        ssd_advance_write_pointer(ssd);
-
-        struct nand_cmd swr;
-        swr.type = USER_IO;
-        swr.cmd = NAND_WRITE;
-        swr.stime = req->stime;
-        /* get latency statistics */
-        curlat = ssd_advance_status(ssd, &ppa, &swr);
-        maxlat = (curlat > maxlat) ? curlat : maxlat;
-    }
-
-    return maxlat;
-}
-
-#if 1 //NAM
-
-static int32_t buff_write(struct ssd *ssd, NvmeRequest *req)
-{
-#if 1 //NAM
-	uint64_t lba = req->slba; 
-	struct ssdparams *spp = &ssd->sp; 	
-	int len = req->nlb; 
-	uint64_t start_lpn = lba / spp->secs_per_pg; 
-	uint64_t end_lpn = (lba + len - 1) / spp->secs_per_pg; 
-	struct ppa ppa; 
-	uint64_t lpn;
-#endif 
-	struct buff_node* newNode = (struct buff_node*)malloc(sizeof(struct buff_node)); 
-	if (!newNode) { 
-		ftl_log("newNode ERR\n");
-		//return -1; 
-	} 
-
-	newNode->req = req;
-	newNode->next = NULL; 
-	
-	// sure ? 
-	if (buff.head == NULL && buff.tail == NULL) { 
-		buff.head = newNode; 
-		buff.tail = newNode; 
-	} else { 
-		newNode->next = buff.head;
-		buff.head->prev = newNode;
-		buff.head = newNode; 
-	}
-
-	buff.tot_cnt++; 
-	ftl_log("buff.tot_cnt: %d\n", buff.tot_cnt);
-
-#if 1 //NAM
-	/* update mapping information */
-	for (lpn = start_lpn; lpn <= end_lpn; lpn++) {
-		ftl_log("test 1\n"); 
-		ppa = get_maptbl_ent(ssd, lpn); 
-		if (mapped_ppa(&ppa)) { 
-			/* update old page information first */
-			if (!mapped_buff(&ppa)) {
-				goto here;
-			}
-			ftl_log("test 2\n");
-			mark_page_invalid(ssd, &ppa);
-			ftl_log("test 3\n");
-			set_rmap_ent(ssd, INVALID_LPN, &ppa); 
-		} 
-here: 
-		ftl_log("test 4\n"); 
-		/* update maptbl with WRITE_ON_BUFF flag */
-		set_btbl_ent(ssd, lpn, &ppa);
-	}
-#endif
-	return 0; 
-} 
-
+#if 1 //PFTL
 static int32_t buff_dequeue(struct ssd *ssd)
 {
 	//uint64_t lat = 0; 
-	NvmeRequest *buff_req;
+	//vmeRequest *buff_req;
 	struct buff_node *tmp_node; 
+	struct ppa ppa; 
+	int r; 
+	int64_t stime; 
+	uint64_t lpn, curlat = 0, maxlat = 0; 
 
 	tmp_node = buff.tail; 
-	buff_req = buff.tail->req;
-	
+	lpn = buff.tail->lpn;
+	stime = buff.tail->stime; 
+
 	/* send request to flash */
 	//lat = ssd_write(ssd, buff_req);
-	ssd_write(ssd, buff_req); 
+	while (should_gc_high(ssd)) { 
+		/* perform GC here until !should_gc(ssd) */
+		r = do_gc(ssd, true); 
+		if (r == -1)
+			break; 
+	} 
 
-//	ftl_log("Is error here?\n");
+	ppa = get_maptbl_ent(ssd, lpn); 
+
+	/* bug check */ 
+	if (!existed_buff(&ppa)) { 
+		ftl_log("buff dequeue ERR...\n"); 	
+	}
+
+	/* new write */
+	ppa = get_new_page(ssd); 
+	/* update maptbl */
+	set_maptbl_ent(ssd, lpn, &ppa);
+	/* update rmap */
+	set_rmap_ent(ssd, lpn, &ppa); 
+
+	mark_page_valid(ssd, &ppa); 
+
+	/* need to advance the write pointer here */
+	ssd_advance_write_pointer(ssd); 
+
+	struct nand_cmd swr; 
+	swr.type = USER_IO; 
+	swr.cmd = NAND_WRITE; 
+	swr.stime = stime; 
+	/* get latency statistics */ 
+	curlat = ssd_advance_status(ssd, &ppa, &swr); 
+	maxlat = (curlat > maxlat) ? curlat : maxlat; 
+	//how can I treat this latency .. 
+
 	/* move buff's tail pointer */
-//	buff->tail = buff->tail->prev;
 	if (buff.head == buff.tail) { 
 		buff.head = NULL; 
 		buff.tail = NULL; 
 	} else {
-//		ftl_log("In the If~else~\n");
 		buff.tail = buff.tail->prev;
 		buff.tail->next = NULL; 
 	}
@@ -1028,6 +900,65 @@ static int32_t buff_dequeue(struct ssd *ssd)
 	return 1; 
 }
 
+static int32_t buff_write(struct ssd *ssd, NvmeRequest *req)
+{
+	uint64_t lba = req->slba; 
+	struct ssdparams *spp = &ssd->sp; 
+	int len = req->nlb; 
+	uint64_t start_lpn = lba / spp->secs_per_pg; 
+	uint64_t end_lpn = (lba + len - 1) / spp->secs_per_pg; 
+	struct ppa ppa; 
+	uint64_t lpn;
+
+	for (lpn = start_lpn; lpn <= end_lpn; lpn++) { 
+		struct buff_node* newNode = (struct buff_node*)malloc(sizeof(struct buff_node)); 
+		if (!newNode) { 
+			ftl_log("newNode ERR\n"); 
+		} 
+		
+		/* fill the request information */
+		newNode->lpn = lpn; 
+		newNode->stime = req->stime; 
+		newNode->prev = NULL; 
+		newNode->next = NULL; 
+
+		/* link the pointer */
+		if (buff.head == NULL && buff.tail == NULL) { 
+			buff.head = newNode; 
+			buff.tail = newNode;
+		} else {
+			newNode->next = buff.head; 
+			buff.head->prev = newNode; 
+			buff.head = newNode; 
+		} 
+
+		buff.tot_cnt++; 
+
+		/* update mapping information */
+		ppa = get_maptbl_ent(ssd, lpn); 
+		if (existed_buff(&ppa)) {
+			struct buff_node *oldNode = ppa.buff;
+			free(oldNode); 
+			buff.tot_cnt--; 
+		}
+
+		if (mapped_ppa(&ppa)) { 
+			/* update old page information first */
+			mark_page_invalid(ssd, &ppa);
+			set_rmap_ent(ssd, INVALID_LPN, &ppa); 
+		}
+
+		/* update maptbl with node pointer */
+		set_btbl_ent(ssd, lpn, &ppa, newNode); 
+
+		/* dequeue some request if buff size is full */ 
+		if (buff.tot_cnt == BUFF_THRES) { 
+			buff_dequeue(ssd); 
+		}
+	}
+	return 0; 
+} 
+#endif
 static void *ftl_thread(void *arg)
 {
     FemuCtrl *n = (FemuCtrl *)arg;
@@ -1084,13 +1015,7 @@ static void *ftl_thread(void *arg)
                 ftl_err("FTL to_poller enqueue failed\n");
             }
 
-			/* dequeue some request if buff size full */ 
-			if (req->is_write) { 
-				if (buff.tot_cnt == BUFF_THRES) { 
-					buff_dequeue(ssd); 
-				}
-			}
-            /* clean one line if needed (in the background) */
+      		/* clean one line if needed (in the background) */
             if (should_gc(ssd)) {
                 do_gc(ssd, false);
             }
@@ -1099,68 +1024,9 @@ static void *ftl_thread(void *arg)
 
     return NULL;
 }
-
+#if 1 //PFTL
 int16_t get_buff_tot_cnt(void)
 {
 	return buff.tot_cnt;
 }	
 #endif
-#if 0
-static void *ftl_thread(void *arg)
-{
-    FemuCtrl *n = (FemuCtrl *)arg;
-    struct ssd *ssd = n->ssd;
-    NvmeRequest *req = NULL;
-    uint64_t lat = 0;
-    int rc;
-    int i;
-
-    while (!*(ssd->dataplane_started_ptr)) {
-        usleep(100000);
-    }
-
-    /* FIXME: not safe, to handle ->to_ftl and ->to_poller gracefully */
-    ssd->to_ftl = n->to_ftl;
-    ssd->to_poller = n->to_poller;
-
-    while (1) {
-        for (i = 1; i <= n->num_poller; i++) {
-            if (!ssd->to_ftl[i] || !femu_ring_count(ssd->to_ftl[i]))
-                continue;
-
-            rc = femu_ring_dequeue(ssd->to_ftl[i], (void *)&req, 1);
-            if (rc != 1) {
-                printf("FEMU: FTL to_ftl dequeue failed\n");
-            }
-
-            ftl_assert(req);
-            switch (req->is_write) {
-            case 1:
-                lat = ssd_write(ssd, req);
-                break;
-            case 0:
-                lat = ssd_read(ssd, req);
-                break;
-            default:
-                ftl_err("FTL received unkown request type, ERROR\n");
-            }
-
-            req->reqlat = lat;
-            req->expire_time += lat;
-
-            rc = femu_ring_enqueue(ssd->to_poller[i], (void *)&req, 1);
-            if (rc != 1) {
-                ftl_err("FTL to_poller enqueue failed\n");
-            }
-
-            /* clean one line if needed (in the background) */
-            if (should_gc(ssd)) {
-                do_gc(ssd, false);
-            }
-        }
-    }
-
-    return NULL;
-}
-#endif
-
