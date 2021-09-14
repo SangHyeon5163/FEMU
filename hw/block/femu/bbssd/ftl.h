@@ -7,6 +7,11 @@
 #define INVALID_LPN     (~(0ULL))
 #define UNMAPPED_PPA    (~(0ULL))
 #define INEXIST_BUFF	NULL
+
+#define PAGESIZE  4096
+#define _PME (PAGESIZE/8) //per page mapping entries uint64_t
+#define _PMES 9 //calculte mapping index with unit of pages
+
 enum {
     NAND_READ =  0,
     NAND_WRITE = 1,
@@ -162,7 +167,9 @@ struct ssdparams {
     int pgs_per_lun;  /* # of pages per LUN (Die) */
     int pgs_per_ch;   /* # of pages per channel */
     int tt_pgs;       /* total # of pages in the SSD */
-
+	int dirty_check_entries; /* # of pages in the maptbl */ 
+	int protected_ratio; /* # of pages in the protected maptbl */ 
+	
     int blks_per_lun; /* # of blocks per LUN */
     int blks_per_ch;  /* # of blocks per channel */
     int tt_blks;      /* total # of blocks in the SSD */
@@ -216,6 +223,11 @@ struct nand_cmd {
     int64_t stime; /* Coperd: request arrival time */
 };
 
+struct dMap_list_node { 
+	uint64_t idx; 
+	struct dMap_list_node *next; 
+};
+
 struct ssd {
     char *ssdname;
     struct ssdparams sp;
@@ -223,6 +235,13 @@ struct ssd {
     struct ppa *maptbl; /* page level mapping table */
 #if 1 //NAM
 	struct ppa *buff_maptbl; /* just using check buff */
+	int tt_maptbl_dpg; 
+	int tt_maptbl_flush_cnt; 
+	unsigned char *dirty_check; //checked mapping table's dirty condition
+	struct dMap_list_node *dMap_list;
+#endif
+#if 1 //map flush
+	struct ppa *gtd; /* page level meta mapping table */ 
 #endif
 	uint64_t *rmap;     /* reverse mapptbl, assume it's stored in OOB */
     struct write_pointer wp;
