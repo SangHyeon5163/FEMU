@@ -63,6 +63,44 @@ enum {
 
 #endif
 
+struct node_dirty { 
+	uint64_t idx;
+	struct node_dirty *next;
+}; 
+
+struct element { 
+	uint64_t idx; 
+	uint64_t count; 
+}; 
+
+struct ht { 
+	struct element *heap; 
+	uint64_t heap_size; 
+};
+
+struct buff_node {
+	NvmeRequest *req;
+	uint64_t lpn; 
+	int64_t stime; 
+	struct buff_node *prev; 
+	struct buff_node *next;
+}; 
+
+struct bucket { 
+	struct buff_node *head; 
+	uint64_t idx; 
+	uint64_t count; 
+	uint64_t heap_idx; 
+};
+
+struct buff { 
+	uint32_t tot_cnt;
+	struct bucket* htable; 
+	//struct buff_node *head; 
+	//struct buff_node *tail; 
+};
+
+#if 0 //fifo buff
 struct buff_node {
 	//NvmeRequest *req;
 	uint64_t lpn;
@@ -76,7 +114,7 @@ struct buff {
 	struct buff_node *head; 
 	struct buff_node *tail; 
 };
-
+#endif
 /* describe a physical page addr */
 struct ppa {
     union {
