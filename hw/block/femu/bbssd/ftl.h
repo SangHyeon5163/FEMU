@@ -57,62 +57,67 @@ enum {
 #define LUN_BITS    (8)
 #define CH_BITS     (7)
 
-#if 1 //NAM 
+
+#define DAWID_BUFF
+
+#ifdef DAWID_BUFF
 /* things that buffer needed */ 
-#define BUFF_THRES 1024
+#define BUFF_SIZE 1024
+#define LINE_SIZE 64 // ssd maximum parallelism 
+#define PROTECTED_RATIO 0.1
 
-#endif
+//unsigned char dirty_option = 0x1; 
+#define IS_DIRTY 1
+#define EXIST_IN_ZCL 2 // ZCL: Zero Cost List
 
-struct node_dirty { 
+struct zcl_node { 
 	uint64_t idx;
-	struct node_dirty *next;
+	struct zcl_node *next;
 }; 
 
-struct element { 
+struct hnode { 
 	uint64_t idx; 
 	uint64_t count; 
 }; 
 
-struct ht { 
-	struct element *heap; 
-	uint64_t heap_size; 
-};
-
-struct buff_node {
+struct ssd_req {
 	NvmeRequest *req;
 	uint64_t lpn; 
 	int64_t stime; 
-	struct buff_node *prev; 
-	struct buff_node *next;
+	struct ssd_req *prev; 
+	struct ssd_req *next;
 }; 
 
-struct bucket { 
-	struct buff_node *head; 
-	uint64_t idx; 
-	uint64_t count; 
-	uint64_t heap_idx; 
+struct req_tbl_ent{ 
+	struct ssd_req *head; 
+	uint64_t idx; 		// mapping table page idx 
+	uint64_t heap_idx; 	
 };
 
-struct buff { 
-	uint32_t tot_cnt;
-	struct bucket* htable; 
-	//struct buff_node *head; 
-	//struct buff_node *tail; 
+struct ssd_buff { 
+	uint32_t tt_reqs;
+	struct req_tbl_ent* req_tbl;
+	struct hnode* req_max_heap;
+	uint64_t req_max_heap_size;
+
+	// zero cost list 
+	struct zcl_node* zcl; 
 };
+#endif
 
 #if 0 //fifo buff
-struct buff_node {
+struct ssd_req {
 	//NvmeRequest *req;
 	uint64_t lpn;
 	int64_t stime;
-	struct buff_node *prev; 
-	struct buff_node *next;
+	struct ssd_req *prev; 
+	struct ssd_req *next;
 }; 
 
 struct buff { 
 	uint32_t tot_cnt;
-	struct buff_node *head; 
-	struct buff_node *tail; 
+	struct ssd_req *head; 
+	struct ssd_req *tail; 
 };
 #endif
 /* describe a physical page addr */
@@ -131,7 +136,7 @@ struct ppa {
         uint64_t ppa;
     };
 // DAWID
-	struct buff_node *buff;
+	struct ssd_req *bfa;
 };
 
 typedef int nand_sec_status_t;
@@ -205,8 +210,10 @@ struct ssdparams {
     int pgs_per_lun;  /* # of pages per LUN (Die) */
     int pgs_per_ch;   /* # of pages per channel */
     int tt_pgs;       /* total # of pages in the SSD */
-	int dirty_check_entries; /* # of pages in the maptbl */ 
-	int protected_ratio; /* # of pages in the protected maptbl */ 
+#ifdef DAWID_BUFF
+	int pgs_maptbl; /* # of pages in the maptbl */ 
+	int pgs_protected; /* # of pages in the protected maptbl */ 
+#endif
 	
     int blks_per_lun; /* # of blocks per LUN */
     int blks_per_ch;  /* # of blocks per channel */
@@ -271,14 +278,13 @@ struct ssd {
     struct ssdparams sp;
     struct ssd_channel *ch;
     struct ppa *maptbl; /* page level mapping table */
-#if 1 //NAM
-	struct ppa *buff_maptbl; /* just using check buff */
+#ifdef DAWID_BUFF
+	struct ssd_buff buff;
+
 	int tt_maptbl_dpg; 
-	int tt_maptbl_flush_cnt; 
-	unsigned char *dirty_check; //checked mapping table's dirty condition
+	int tt_maptbl_flush; 
+	int *maptbl_state; //checked mapping table's dirty condition
 	struct dMap_list_node *dMap_list;
-#endif
-#if 1 //map flush
 	struct ppa *gtd; /* page level meta mapping table */ 
 #endif
 	uint64_t *rmap;     /* reverse mapptbl, assume it's stored in OOB */
@@ -293,18 +299,18 @@ struct ssd {
 };
 
 #if 0 //NAM
-struct buff_node {
+struct ssd_req {
 	//NvmeRequest *req;
 	uint64_t lpn;
 	int64_t stime;
-	struct buff_node *prev; 
-	struct buff_node *next;
+	struct ssd_req *prev; 
+	struct ssd_req *next;
 }; 
 
 struct buff { 
 	uint32_t tot_cnt;
-	struct buff_node *head; 
-	struct buff_node *tail; 
+	struct ssd_req *head; 
+	struct ssd_req *tail; 
 };
 #endif 
 
