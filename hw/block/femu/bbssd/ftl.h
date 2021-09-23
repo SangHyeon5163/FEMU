@@ -59,17 +59,18 @@ enum {
 
 
 #define USE_BUFF
-#define DAWID_BUFF
+//#define USE_BUFF_DEBUG
+//#define DAWID_BUFF
 
 #ifdef USE_BUFF
 /* things that buffer needed */ 
-#define BUFF_SIZE 1024
-#define LINE_SIZE 64 // ssd maximum parallelism 
+#define BUFF_SIZE 128
+#define LINE_SIZE 1 // ssd maximum parallelism 
 #define PROTECTED_RATIO 0.1
 
 //unsigned char dirty_option = 0x1; 
-#define IS_DIRTY 1
-#define EXIST_IN_ZCL 2 // ZCL: Zero Cost List
+#define DIRTY_BIT_SHIFT 0
+#define EXIST_IN_ZCL_BIT_SHIFT 1 // ZCL: Zero Cost List
 
 struct zcl_node { 
 	uint64_t mpg_idx; // request table maptbl pg no. 
