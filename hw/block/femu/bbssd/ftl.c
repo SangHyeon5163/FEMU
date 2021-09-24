@@ -1,6 +1,7 @@
 #include "ftl.h"
 
 #define FEMU_DEBUG_FTL
+int write_cnt = 0; 
 struct buff buff; 
 struct node_dirty *dHead = NULL; 
 struct ht h; 
@@ -249,6 +250,8 @@ static struct ppa get_new_page(struct ssd *ssd)
     ppa.g.pl = wpp->pl;
     ftl_assert(ppa.g.pl == 0);
 
+	write_cnt++;
+	ftl_log("write_cnt: %d\n", write_cnt); 
     return ppa;
 }
 
@@ -834,7 +837,7 @@ static int do_gc(struct ssd *ssd, bool force)
     struct ppa ppa;
     int ch, lun;
 	
-	//ftl_log("do_gc\n");
+	ftl_log("do_gc\n");
     victim_line = select_victim_line(ssd, force);
     if (!victim_line) {
         return -1;

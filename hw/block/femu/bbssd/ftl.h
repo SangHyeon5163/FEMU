@@ -59,7 +59,7 @@ enum {
 
 #if 1 //NAM 
 /* things that buffer needed */ 
-#define BUFF_THRES 1024
+#define BUFF_THRES 16384 
 
 #endif
 
