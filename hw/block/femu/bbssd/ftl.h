@@ -58,10 +58,17 @@ enum {
 #define NOT_MODIFIED    (0)
 #define MAX_INCMT       (100)
 
-#define DATA_PAGE           (0)
-#define TRANSLATION_PAGE    (1)
-#define DATA_BLOCK          (0)
-#define TRANSLATION_BLOCK   (1)
+#define INVALID_PAGE	    (0)
+#define DATA_PAGE           (1)
+#define TRANSLATION_PAGE    (2)
+#define INVALID_BLOCK	    (0)
+#define DATA_BLOCK          (1)
+#define TRANSLATION_BLOCK   (2)
+#define INVALID_LINE	    (0)
+#define DATA_LINE	    (1)
+#define TRANSLATION_LINE    (2)
+
+#define PAGE_SIZE	    (4096)
 
 /* describe a physical page addr */
 struct ppa {
@@ -201,6 +208,7 @@ typedef struct line {
     QTAILQ_ENTRY(line) entry; /* in either {free,victim,full} list */
     /* position in the priority queue for victim lines */
     size_t                  pos;
+    int data_or_map;
 } line;
 
 /* wp: record next write addr */
@@ -249,7 +257,7 @@ struct ssd {
     uint64_t *rmap;     /* reverse mapptbl, assume it's stored in OOB */
     struct write_pointer wp;
     struct line_mgmt lm;
-    uint32_t page_size;
+    uint64_t page_size;
 
     /* lockless ring for communication with NVMe IO thread */
     struct rte_ring **to_ftl;

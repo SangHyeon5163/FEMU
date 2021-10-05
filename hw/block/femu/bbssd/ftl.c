@@ -107,6 +107,7 @@ static void ssd_init_lines(struct ssd *ssd)
         line->id = i;
         line->ipc = 0;
         line->vpc = 0;
+	line->data_or_map = INVALID_LINE;
         /* initialize all the lines as free lines */
         QTAILQ_INSERT_TAIL(&lm->free_line_list, line, entry);
         lm->free_line_cnt++;
@@ -129,6 +130,7 @@ static void ssd_init_DFTL_write_pointer(struct ssd *ssd)
 
     /* initialization for current translation block */
     wpp->Tcurline = Tcurline;
+    wpp->Tcurline->data_or_map = TRANSLATION_LINE;
     wpp->Tch = 0;
     wpp->Tlun = 0;
     wpp->Tpg = 0;
@@ -148,6 +150,7 @@ static void ssd_init_write_pointer(struct ssd *ssd)
 
     /* wpp->curline is always our next-to-write super-block */
     wpp->curline = curline;
+    wpp->curline->data_or_map = DATA_LINE;
     wpp->ch = 0;
     wpp->lun = 0;
     wpp->pg = 0;
@@ -217,6 +220,7 @@ static void ssd_advance_translation_write_pointer(struct ssd *ssd)
                     /* TODO */
                     abort();
                 }
+		wpp->Tcurline->data_or_map = TRANSLATION_LINE;
                 wpp->Tblk = wpp->Tcurline->id;
                 check_addr(wpp->Tblk, spp->blks_per_pl);
                 /* make sure we are starting from page 0 in the super block */
@@ -271,6 +275,7 @@ static void ssd_advance_write_pointer(struct ssd *ssd)
                     /* TODO */
                     abort();
                 }
+		wpp->curline->data_or_map = DATA_LINE;
                 wpp->blk = wpp->curline->id;
                 check_addr(wpp->blk, spp->blks_per_pl);
                 /* make sure we are starting from page 0 in the super block */
@@ -452,22 +457,17 @@ static void ssd_init_rmap(struct ssd *ssd)
     }
 }
 
-static void ssd_init_translation_rmap(struct ssd *ssd, struct ppa *ppa, uint64_t count)
-{
-    uint64_t pgidx = ppa2pgidx(ssd, ppa);
-    ssd->rmap[pgidx] = count;
-}
-
 static void ssd_init_DFTL_GTD(struct ssd *ssd)
 {
     struct ssdparams *spp = &ssd->sp;
     uint64_t GTD_entry_count = ((sizeof(struct ppa) * spp->tt_pgs) / ssd->page_size);    /* GTD entry count = (sizeof(maptbl) / page_size) */
     uint64_t mapEntry_per_page = (ssd->page_size /sizeof(struct ppa));      /* mapEntry per page = mapEntry per GTD entry = page_size / sizeof(struct ppa) */
-    
+    ssd->GTD = g_malloc0(sizeof(struct GTD));
+    femu_debug("ssd->GTD g_malloc0 finished\n"); 
     ssd->GTD->current_inCMT = 0;
     ssd->GTD->max_inCMT = MAX_INCMT;
     ssd->GTD->GTD_entries = g_malloc0(sizeof(struct GTD_entry) * GTD_entry_count);    /* GTD size = GTD_entry_count * sizeof(GTD_entry) */
-    
+    femu_debug("ssd->GTD->GTD_entries g_malloc0 finished\n");
     for (int i = 0; i < GTD_entry_count; i++) {
         ssd->GTD->GTD_entries[i].map_page = &(ssd->maptbl[mapEntry_per_page * i]);    /* Store the address of maptbl page in each GTD entry */
         ssd->GTD->GTD_entries[i].inCMT = NOT_IN_CMT;
@@ -480,19 +480,16 @@ static void ssd_init_DFTL_map(struct ssd *ssd)
     struct ssdparams *spp = &ssd->sp;
     uint64_t GTD_entry_count = ((sizeof(struct ppa) * spp->tt_pgs) / ssd->page_size);    /* GTD entry count = (sizeof(maptbl) / page_size) */
     uint64_t mapEntry_per_page = (ssd->page_size /sizeof(struct ppa));      /* mapEntry per page = mapEntry per GTD entry = page_size / sizeof(struct ppa) */
-    uint64_t map_table_tt_pgs = GTD_entry_count * mapEntry_per_page;        /* total page of entire map table */
+    uint64_t map_table_tt_pgs = GTD_entry_count;		         /* total page of entire map table */
     struct ppa ppa;
-    uint64_t count = 0;
+  
+    femu_debug("size of struct ppa: %ld, GTD__entry_count = %ld, mapEntry_per_page = %ld, map_table_tt_pgs = %ld\n", sizeof(struct ppa), GTD_entry_count, mapEntry_per_page, map_table_tt_pgs);
    
     for (int i = 0; i < map_table_tt_pgs; i++) {       
         ppa = get_new_translation_page(ssd);                    /* get new translation page from wpp->Tch, Tlun ... */
-        if (count % mapEntry_per_page == 0)
-        {
-            count = count / mapEntry_per_page;                  /* count for GTD_entries index */
-            ssd->GTD->GTD_entries[count].map_page_ppa = ppa;    /* set ppa of map table */    
-        }   
+        ssd->GTD->GTD_entries[i].map_page_ppa = ppa;    /* set ppa of map table */
         mark_translation_page_valid(ssd, &ppa);                 /* mark translation page valid, set TRANSLATION_PAGE, TRANSLATION_BLOCK, vpc ... */
-        ssd_init_translation_rmap(ssd, &ppa, count);            /* rmap set every time the translation page is flushed */
+        set_rmap_ent(ssd, i, &ppa);            /* rmap set every time the translation page is flushed */
         ssd_advance_translation_write_pointer(ssd);             /* advance translation write pointer using wpp->Tcp, Tlun ... */
     }
 }
@@ -570,8 +567,9 @@ void ssd_init(FemuCtrl *n)
 {
     struct ssd *ssd = n->ssd;
     struct ssdparams *spp = &ssd->sp;
-    ssd->page_size = n->page_size;
-
+    // ssd->page_size = n->page_size;
+    ssd->page_size = PAGE_SIZE;
+    femu_debug("ssd->page_size = %ld", ssd->page_size);
     ftl_assert(ssd);
 
     ssd_init_params(spp);
@@ -591,8 +589,10 @@ void ssd_init(FemuCtrl *n)
     /* initialize all the lines */
     ssd_init_lines(ssd);
 
+    femu_debug("ssd_init_DFTL start\n");
     /* initialize DFTL - GTD, flush map table to flash memory, set rmap */
     ssd_init_DFTL(ssd);
+    femu_debug("ssd_init_DFTL finished\n");
 
     /* initialize write pointer, this is how we allocate new pages for writes */
     ssd_init_write_pointer(ssd);
@@ -748,6 +748,7 @@ static void mark_page_invalid(struct ssd *ssd, struct ppa *ppa)
     pg = get_pg(ssd, ppa);
     ftl_assert(pg->status == PG_VALID);
     pg->status = PG_INVALID;
+    pg->data_or_map = INVALID_PAGE;
 
     /* update corresponding block status */
     blk = get_blk(ssd, ppa);
@@ -834,12 +835,14 @@ static void mark_block_free(struct ssd *ssd, struct ppa *ppa)
         pg = &blk->pg[i];
         ftl_assert(pg->nsecs == spp->secs_per_pg);
         pg->status = PG_FREE;
+	pg->data_or_map = INVALID_PAGE;
     }
 
     /* reset block status */
     ftl_assert(blk->npgs == spp->pgs_per_blk);
     blk->ipc = 0;
     blk->vpc = 0;
+    blk->data_or_map = INVALID_BLOCK;
     blk->erase_cnt++;
 }
 
@@ -860,7 +863,7 @@ static uint64_t gc_write_page(struct ssd *ssd, struct ppa *old_ppa)
 {
     struct ppa new_ppa;
     struct nand_lun *new_lun;
-    uint64_t lpn = get_rmap_ent(ssd, old_ppa);
+    uint64_t lpn = get_rmap_ent(ssd, old_ppa); 
 
     ftl_assert(valid_lpn(ssd, lpn));
     new_ppa = get_new_page(ssd);
@@ -894,6 +897,44 @@ static uint64_t gc_write_page(struct ssd *ssd, struct ppa *old_ppa)
     return 0;
 }
 
+static uint64_t gc_write_translation_page(struct ssd *ssd, struct ppa *old_ppa)
+{
+    struct ppa new_ppa;
+    struct nand_lun *new_lun;
+    uint64_t GTD_index = get_rmap_ent(ssd, old_ppa);
+
+    new_ppa = get_new_translation_page(ssd);
+    
+    ssd->GTD->GTD_entries[GTD_index].map_page_ppa = new_ppa;
+    /* update rmap */
+    set_rmap_ent(ssd, GTD_index, &new_ppa);
+
+    mark_translation_page_valid(ssd, &new_ppa);
+
+    /* need to advance the write pointer here */
+    ssd_advance_translation_write_pointer(ssd);
+
+    if (ssd->sp.enable_gc_delay) {
+        struct nand_cmd gcw;
+        gcw.type = GC_IO;
+        gcw.cmd = NAND_WRITE;
+        gcw.stime = 0;
+        ssd_advance_status(ssd, &new_ppa, &gcw);
+    }
+
+    /* advance per-ch gc_endtime as well */
+#if 0
+    new_ch = get_ch(ssd, &new_ppa);
+    new_ch->gc_endtime = new_ch->next_ch_avail_time;
+#endif
+
+    new_lun = get_lun(ssd, &new_ppa);
+    new_lun->gc_endtime = new_lun->next_lun_avail_time;
+
+    return 0;
+}
+
+
 static struct line *select_victim_line(struct ssd *ssd, bool force)
 {
     struct line_mgmt *lm = &ssd->lm;
@@ -916,12 +957,40 @@ static struct line *select_victim_line(struct ssd *ssd, bool force)
 }
 
 /* here ppa identifies the block we want to clean */
-static void clean_one_block(struct ssd *ssd, struct ppa *ppa)
+
+static void clean_one_translation_block(struct ssd *ssd, struct ppa *ppa)
 {
     struct ssdparams *spp = &ssd->sp;
     struct nand_page *pg_iter = NULL;
     int cnt = 0;
+    
+    for (int pg = 0; pg < spp->pgs_per_blk; pg++) {
+        ppa->g.pg = pg;
+        pg_iter = get_pg(ssd, ppa);
+        /* there shouldn't be any free page in victim blocks */
+        ftl_assert(pg_iter->status != PG_FREE);
+        if (pg_iter->status == PG_VALID) {
+            gc_read_page(ssd, ppa);
+            /* delay the maptbl update until "write" happens */
+            gc_write_translation_page(ssd, ppa);
+            
+	    set_rmap_ent(ssd, INVALID_LPN, ppa);
 
+            cnt++;
+        }
+    }
+
+    ftl_assert(get_blk(ssd, ppa)->vpc == cnt);
+}
+
+static void clean_one_data_block(struct ssd *ssd, struct ppa *ppa, uint64_t *translation_update_set, int *cnt)
+{
+    struct ssdparams *spp = &ssd->sp;
+    struct nand_page *pg_iter = NULL;
+    uint64_t mapEntry_per_page = (ssd->page_size /sizeof(struct ppa));
+    uint64_t GTD_index;
+    uint64_t lpn;   
+ 
     for (int pg = 0; pg < spp->pgs_per_blk; pg++) {
         ppa->g.pg = pg;
         pg_iter = get_pg(ssd, ppa);
@@ -931,11 +1000,21 @@ static void clean_one_block(struct ssd *ssd, struct ppa *ppa)
             gc_read_page(ssd, ppa);
             /* delay the maptbl update until "write" happens */
             gc_write_page(ssd, ppa);
-            cnt++;
+	    
+	    lpn = get_rmap_ent(ssd, ppa);
+	    GTD_index = lpn / mapEntry_per_page;
+
+	    femu_debug("In clean_one_data_block - GTD_index: %lu, In clean_one_data_block - GTD_offset: %lu \n", GTD_index, lpn % mapEntry_per_page);
+
+	    translation_update_set[*cnt] = GTD_index;
+
+	    set_rmap_ent(ssd, INVALID_LPN, ppa);
+
+            *cnt += 1;
         }
     }
 
-    ftl_assert(get_blk(ssd, ppa)->vpc == cnt);
+    ftl_assert(get_blk(ssd, ppa)->vpc == *cnt);
 }
 
 static void mark_line_free(struct ssd *ssd, struct ppa *ppa)
@@ -944,9 +1023,36 @@ static void mark_line_free(struct ssd *ssd, struct ppa *ppa)
     struct line *line = get_line(ssd, ppa);
     line->ipc = 0;
     line->vpc = 0;
+    line->data_or_map = INVALID_LINE;
     /* move this line to free line list */
     QTAILQ_INSERT_TAIL(&lm->free_line_list, line, entry);
     lm->free_line_cnt++;
+}
+
+static void deleteDuplicate(uint64_t* arr, int* len){
+	uint64_t newArr[*len];
+	int arrcount = 0;
+
+	for (int i = 0; i < *len; i++) 
+	{
+		int count = 0;
+		for (int j = 0; j < arrcount; j++) 
+		{
+			if ( arr[i] == newArr [j])
+			{	
+				count++;
+				break;
+			}
+		} 
+		if ( count == 0)
+		{
+			newArr[arrcount++] = arr[i];
+		}
+	}
+	for (int i = 0; i < arrcount; i++){
+		arr[i] = newArr[i];
+	}
+	*len = arrcount;
 }
 
 static int do_gc(struct ssd *ssd, bool force)
@@ -956,41 +1062,116 @@ static int do_gc(struct ssd *ssd, bool force)
     struct nand_lun *lunp;
     struct ppa ppa;
     int ch, lun;
+    
+    femu_debug("gc start\n");    
 
     victim_line = select_victim_line(ssd, force);
     if (!victim_line) {
         return -1;
     }
-
+    
     ppa.g.blk = victim_line->id;
     ftl_debug("GC-ing line:%d,ipc=%d,victim=%d,full=%d,free=%d\n", ppa.g.blk,
               victim_line->ipc, ssd->lm.victim_line_cnt, ssd->lm.full_line_cnt,
               ssd->lm.free_line_cnt);
 
-    /* copy back valid data */
-    for (ch = 0; ch < spp->nchs; ch++) {
-        for (lun = 0; lun < spp->luns_per_ch; lun++) {
-            ppa.g.ch = ch;
-            ppa.g.lun = lun;
-            ppa.g.pl = 0;
-            lunp = get_lun(ssd, &ppa);
-            clean_one_block(ssd, &ppa);
-            mark_block_free(ssd, &ppa);
+    if (victim_line->data_or_map == TRANSLATION_LINE)
+    {
+	femu_debug("victim_line is translation line\n");
 
-            if (spp->enable_gc_delay) {
-                struct nand_cmd gce;
-                gce.type = GC_IO;
-                gce.cmd = NAND_ERASE;
-                gce.stime = 0;
-                ssd_advance_status(ssd, &ppa, &gce);
+	for (ch = 0; ch < spp->nchs; ch++) {
+            for (lun = 0; lun < spp->luns_per_ch; lun++) {
+                ppa.g.ch = ch;
+                ppa.g.lun = lun;
+                ppa.g.pl = 0;
+                lunp = get_lun(ssd, &ppa);
+		
+		femu_debug("clean_one_translation_block start\n");
+
+                clean_one_translation_block(ssd, &ppa);
+		
+		femu_debug("clean_one_translation_block finished\n");	
+
+                mark_block_free(ssd, &ppa);
+
+                if (spp->enable_gc_delay) {
+                    struct nand_cmd gce;
+                    gce.type = GC_IO;
+                    gce.cmd = NAND_ERASE;
+                    gce.stime = 0;
+                    ssd_advance_status(ssd, &ppa, &gce);
+                }
+
+                lunp->gc_endtime = lunp->next_lun_avail_time;
             }
-
-            lunp->gc_endtime = lunp->next_lun_avail_time;
         }
     }
+    else if(victim_line->data_or_map == DATA_LINE)
+    {
+	femu_debug("victim_line is data line\n");
+
+	uint64_t translation_update_set[victim_line->vpc];
+	int temp = 0;
+	int *cnt = &temp;
+
+	femu_debug("victim_line->vpc = %u\n", victim_line->vpc);
+
+	for (ch = 0; ch < spp->nchs; ch++) {
+            for (lun = 0; lun < spp->luns_per_ch; lun++) {
+                ppa.g.ch = ch;
+                ppa.g.lun = lun;
+                ppa.g.pl = 0;
+                lunp = get_lun(ssd, &ppa);
+
+                clean_one_data_block(ssd, &ppa, translation_update_set, cnt);
+                
+		mark_block_free(ssd, &ppa);
+
+                if (spp->enable_gc_delay) {
+                    struct nand_cmd gce;
+                    gce.type = GC_IO;
+                    gce.cmd = NAND_ERASE;
+                    gce.stime = 0;
+                    ssd_advance_status(ssd, &ppa, &gce);
+                }
+
+            	lunp->gc_endtime = lunp->next_lun_avail_time;
+            }
+        }
+	
+	femu_debug("*cnt : %d\n", *cnt); 
+
+	deleteDuplicate(translation_update_set, cnt);
+	
+	uint64_t GTD_index;
+	struct ppa map_ppa;
+
+	for (uint64_t i = 0; i < *cnt; i++) {
+	    GTD_index = translation_update_set[i];
+
+	    femu_debug("In translation update - GTD_index: %lu\n", GTD_index);
+	  
+	    map_ppa = ssd->GTD->GTD_entries[GTD_index].map_page_ppa;
+
+	    gc_read_page(ssd, &map_ppa);
+            gc_write_translation_page(ssd, &map_ppa);
+	 
+	    mark_page_invalid(ssd, &map_ppa);
+            set_rmap_ent(ssd, INVALID_LPN, &map_ppa);
+
+	}
+
+    }
+    else
+    {
+	femu_debug("victim_line.data_or_map is INVALID_LINE\n");
+    }
+    /* copy back valid data */
 
     /* update line status */
     mark_line_free(ssd, &ppa);
+    
+    femu_debug("gc finished\n");
 
     return 0;
 }
@@ -1062,7 +1243,7 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
 
     for (lpn = start_lpn; lpn <= end_lpn; lpn++) {
 	translat = ssd_address_translation(ssd, req, lpn);
-
+	
         ppa = get_maptbl_ent(ssd, lpn);
         if (mapped_ppa(&ppa)) {
             /* update old page information first */
