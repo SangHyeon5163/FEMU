@@ -1,3 +1,5 @@
+#define FTL
+
 #ifndef __FEMU_FTL_H
 #define __FEMU_FTL_H
 
@@ -87,6 +89,7 @@ struct ppa {
     };
 };
 
+#ifdef DFTL
 struct dll {
     struct dll_entry *head;
     struct dll_entry *tail;
@@ -111,6 +114,7 @@ struct GTD {
     int max_inCMT;                      /* max page counts of CMT */
     int current_inCMT;                  /* current page counts of CMT */
 };
+#endif
 
 typedef int nand_sec_status_t;
 
@@ -118,7 +122,10 @@ struct nand_page {
     nand_sec_status_t *sec;
     int nsecs;
     int status;
+
+	#ifdef DFTL
     int data_or_map;
+	#endif
 };
 
 struct nand_block {
@@ -128,7 +135,10 @@ struct nand_block {
     int vpc; /* valid data or translationpage count */
     int erase_cnt;
     int wp; /* current write pointer */
+
+	#ifdef DFTL
     int data_or_map;    /* data block or translation block */
+	#endif
 };
 
 struct nand_plane {
@@ -208,25 +218,32 @@ typedef struct line {
     QTAILQ_ENTRY(line) entry; /* in either {free,victim,full} list */
     /* position in the priority queue for victim lines */
     size_t                  pos;
+
+	#ifdef DFTL
     int data_or_map;
+	#endif
+
 } line;
 
 /* wp: record next write addr */
 struct write_pointer {
     struct line *curline;
-    struct line *Tcurline;
-
+    
     int ch;
     int lun;
     int pg;
     int blk;
     int pl;
 
+	#ifdef DFTL
+	struct line *Tcurline;
+
     int Tch;
     int Tlun;
     int Tpg;
     int Tblk;
     int Tpl;    /* represent current translation block location */
+	#endif
 };
 
 struct line_mgmt {
@@ -253,7 +270,11 @@ struct ssd {
     struct ssdparams sp;
     struct ssd_channel *ch;
     struct ppa *maptbl; /* page level mapping table */
+
+	#ifdef DFTL
     struct GTD *GTD;      /* Global Translation Directory - 1 entry indicate 1 page of maptbl */
+	#endif	
+
     uint64_t *rmap;     /* reverse mapptbl, assume it's stored in OOB */
     struct write_pointer wp;
     struct line_mgmt lm;
