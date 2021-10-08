@@ -1,4 +1,4 @@
-#define FTL
+#define DFTL
 
 #ifndef __FEMU_FTL_H
 #define __FEMU_FTL_H
@@ -58,7 +58,7 @@ enum {
 #define NOT_IN_CMT      (0)
 #define MODIFIED        (1)
 #define NOT_MODIFIED    (0)
-#define MAX_INCMT       (100)
+#define MAX_INCMT       (10)
 
 #define INVALID_PAGE	    (0)
 #define DATA_PAGE           (1)
@@ -301,7 +301,7 @@ void ssd_init(FemuCtrl *n);
     do { fprintf(stderr, "[FEMU] FTL-Err: " fmt, ## __VA_ARGS__); } while (0)
 
 #define ftl_log(fmt, ...) \
-    do { printf("[FEMU] FTL-Log: " fmt, ## __VA_ARGS__); } while (0)
+    do { printf("" fmt, ## __VA_ARGS__); } while (0)
 
 
 /* FEMU assert() */
