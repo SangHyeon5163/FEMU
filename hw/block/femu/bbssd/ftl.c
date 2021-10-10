@@ -1,13 +1,15 @@
 #include "ftl.h"
-
+int test_cnt = 0; 
 #define FEMU_DEBUG_FTL
 
 static void *ftl_thread(void *arg);
 
+#ifdef DFTL
 static uint64_t cache_hit = 0;
 static uint64_t cache_miss = 0;
 static uint64_t cmt_full = 0;
 static uint64_t entry_modified = 0;
+#endif
 
 #ifdef DFTL
 static void mark_translation_page_valid(struct ssd *ssd, struct ppa *ppa);
@@ -544,14 +546,16 @@ static void ssd_init_LRU(struct ssd *ssd)
 
 static void append_LRU(struct ssd *ssd, uint64_t GTD_index)
 {
-	femu_debug("append_LRU - GTD_index = %lu\n", GTD_index);
+	// femu_debug("append_LRU - GTD_index = %lu\n", GTD_index);
 
     int check = 1;
     struct dll_entry *new_entry;
-    for(struct dll_entry *entry = ssd->GTD->LRU_list->head; entry->next != NULL; entry = entry->next )
+    for(struct dll_entry *entry = ssd->GTD->LRU_list->head->next; entry->next != NULL; entry = entry->next )
     {
         if(entry->GTD_index == GTD_index) 
         {
+			// femu_debug("In append_LRU same GTD_index : %lu\n", GTD_index);
+
             (entry->prev)->next = entry->next;
             (entry->next)->prev = entry->prev;
             (ssd->GTD->LRU_list->head->next)->prev = entry;
@@ -579,13 +583,19 @@ static void append_LRU(struct ssd *ssd, uint64_t GTD_index)
 static int victim_LRU(struct ssd *ssd)
 {
     struct dll_entry *victim_entry = ssd->GTD->LRU_list->tail->prev;
-    uint64_t  victim_index = victim_entry->GTD_index;
+    uint64_t victim_index = victim_entry->GTD_index;
 
-	femu_debug("victim_LRU - GTD_index = %lu\n", victim_index);
+	// femu_debug("victim_LRU - GTD_index = %lu\n", victim_index);
  
+	(victim_entry->prev)->next = ssd->GTD->LRU_list->tail;
+	ssd->GTD->LRU_list->tail->prev = victim_entry->prev;
+	ssd->GTD->current_inCMT--;
+
+	/*
     victim_entry->next = ssd->GTD->LRU_list->tail;
     ssd->GTD->LRU_list->tail->prev = victim_entry->prev;
     ssd->GTD->current_inCMT--;
+	*/
 
     free(victim_entry);
     return victim_index;
@@ -1471,27 +1481,30 @@ static uint64_t ssd_address_translation(struct ssd *ssd, NvmeRequest *req, uint6
     uint64_t mapEntry_per_page = (ssd->page_size /sizeof(struct ppa));      /* mapEntry per page = mapEntry per GTD entry = page_size / sizeof(struct ppa) */
     uint64_t GTD_index;
     // uint64_t map_offset;
-    int victim_index;
+    uint64_t victim_index;
 
     // map_offset = lpn % mapEntry_per_page;
     GTD_index = lpn / mapEntry_per_page;
 
+	// femu_debug("In address_translation - lpn: %lu, mapEntry_per_page: %lu, GTD_index: %lu\n", lpn, mapEntry_per_page, GTD_index);
 
 	// cache hit 
     if (ssd->GTD->GTD_entries[GTD_index].inCMT == IN_CMT) {		    /* when the map table for address translation is in CMT */
 		cache_hit += 1;
+		// femu_debug("cache hit: %lu\n", cache_hit);
 
+		append_LRU(ssd, GTD_index);
         return 0;							    /* No additional latency */
     }
 
 	// cache miss 
     if (ssd->GTD->current_inCMT < ssd->GTD->max_inCMT) 			    /* when the map table for address translation is not in CMT */
-    {									    						/* but CMT is not full */ 	
+    {									    						/* but CMT is not full */ 
 		cache_miss += 1;
-
+		// femu_debug("cache miss: %lu\n", cache_miss);
+	
         append_LRU(ssd, GTD_index);					    /* 1 ssd_read needed to fetch the map table for address translation */
         ssd->GTD->GTD_entries[GTD_index].inCMT = IN_CMT;
-
         ppa = ssd->GTD->GTD_entries[GTD_index].map_page_ppa;
         struct nand_cmd srd;
         srd.type = USER_IO;
@@ -1507,11 +1520,13 @@ static uint64_t ssd_address_translation(struct ssd *ssd, NvmeRequest *req, uint6
     victim_index = victim_LRU(ssd);					    /* CMT is full */
     ssd->GTD->GTD_entries[victim_index].inCMT = NOT_IN_CMT;		    /* have to victim 1 map table with LRU in CMT */
 
+	// femu_debug("victim GTD_entry: %lu, inCMT: %d", victim_index, ssd->GTD->GTD_entries[victim_index].inCMT);
 
 	// victim is clean 
     if (ssd->GTD->GTD_entries[victim_index].modified == NOT_MODIFIED)	    /* the victim map table has not been modified */
     {									    /* 1 ssd_read needed to fetch the map table for address translation */
 		cmt_full += 1;
+		// femu_debug("CMT full: %lu\n", cmt_full);
 
         append_LRU(ssd, GTD_index);
         ssd->GTD->GTD_entries[GTD_index].inCMT = IN_CMT;
@@ -1527,7 +1542,9 @@ static uint64_t ssd_address_translation(struct ssd *ssd, NvmeRequest *req, uint6
 
 		return maxlat;
     }
+
 	entry_modified += 1;
+	// femu_debug("write: %lu\n", entry_modified);
 
 	// victim is dirty 
     ppa = ssd->GTD->GTD_entries[victim_index].map_page_ppa;		    /* CMT was full and the victim map table was modified */
@@ -1716,13 +1733,25 @@ static void *ftl_thread(void *arg)
                 do_gc(ssd, false);
             }
 			
+			/*	
+			int cnt = 0;
 			femu_debug("LRU_list : ");
-			for(struct dll_entry *entry = ssd->GTD->LRU_list->head; entry->next != NULL; entry = entry->next)
+			for(struct dll_entry *entry = ssd->GTD->LRU_list->head->next; entry->next != NULL; entry = entry->next)
 			{
 				ftl_log("%lu ", entry->GTD_index);
+				cnt += 1;
+				
+				if (cnt > ssd->GTD->max_inCMT)
+				{
+					femu_debug("LRU error!!!\n");
+					break;
+				}
 			}
+			
 			ftl_log("\n");
-			ftl_log("read or write: %d, cache hit: %lu, cache miss: %lu\n", req->is_write, cache_hit, cache_miss + cmt_full + entry_modified);
+			*/			
+
+			// femu_debug("cache hit: %lu, cache miss: %lu\n", cache_hit, cache_miss + cmt_full + entry_modified);
         }
     }
 

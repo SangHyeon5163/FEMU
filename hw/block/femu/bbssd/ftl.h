@@ -58,7 +58,7 @@ enum {
 #define NOT_IN_CMT      (0)
 #define MODIFIED        (1)
 #define NOT_MODIFIED    (0)
-#define MAX_INCMT       (10)
+#define MAX_INCMT       (1000)
 
 #define INVALID_PAGE	    (0)
 #define DATA_PAGE           (1)
