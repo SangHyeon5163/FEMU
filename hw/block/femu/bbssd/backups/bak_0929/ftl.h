@@ -57,80 +57,62 @@ enum {
 #define LUN_BITS    (8)
 #define CH_BITS     (7)
 
-
-#define ORG_VER
-//#define USE_BUFF
-//#define DAWID 
-//#define FIFO
-//#define USE_BUFF_DEBUG
-//#define DAWID_BUFF
-
-#ifdef USE_BUFF
+#if 1 //NAM 
 /* things that buffer needed */ 
-#define BUFF_SIZE 1048576
-#define LINE_SIZE 1 // ssd maximum parallelism 
-#define PROTECTED_RATIO 0.01
+#define BUFF_THRES 16384 
 
-//unsigned char dirty_option = 0x1; 
-#define DIRTY_BIT_SHIFT 0
-#define EXIST_IN_ZCL_BIT_SHIFT 1 // ZCL: Zero Cost List
+#endif
 
-struct zcl_node { 
-	uint64_t mpg_idx; // request table maptbl pg no. 
-	struct zcl_node *next;
+struct node_dirty { 
+	uint64_t idx;
+	struct node_dirty *next;
 }; 
 
-struct hnode { 
-	uint64_t mpg_idx;	// mapping table page idx  
-	uint64_t dpg_cnt; // number of data pages associated with the mabtbl pg 
+struct element { 
+	uint64_t idx; 
+	uint64_t count; 
 }; 
 
-struct max_heap {
-	struct hnode* heap;
-	uint64_t hsz;
+struct ht { 
+	struct element *heap; 
+	uint64_t heap_size; 
 };
 
-struct dpg_node { // data page 
+struct buff_node {
 	NvmeRequest *req;
 	uint64_t lpn; 
 	int64_t stime; 
-	struct dpg_node *prev; 
-	struct dpg_node *next;
+	struct buff_node *prev; 
+	struct buff_node *next;
 }; 
 
-struct dpg_tbl_ent{ 
-	struct dpg_node *head; 
-	uint64_t mpg_idx; 		// mapping table page idx 
-	uint64_t heap_idx; 	
+struct bucket { 
+	struct buff_node *head; 
+	uint64_t idx; 
+	uint64_t count; 
+	uint64_t heap_idx; 
 };
 
-struct ssd_buff {
-#ifdef DAWID
-	uint32_t tt_reqs;
-	struct dpg_tbl_ent* dpg_tbl;
-	struct max_heap* mpg_value_heap; // cost-effectiveness of maptable page  
-	struct zcl_node* zcl; // zero cost list 
-#else
-	uint32_t tt_reqs; 
-	struct dpg_node *head; 
-	struct dpg_node *tail; 
-#endif
+struct buff { 
+	uint32_t tot_cnt;
+	struct bucket* htable; 
+	//struct buff_node *head; 
+	//struct buff_node *tail; 
 };
-#endif
 
 #if 0 //fifo buff
-struct data_pg {
+struct buff_node {
 	//NvmeRequest *req;
 	uint64_t lpn;
 	int64_t stime;
-	struct data_pg *prev; 
-	struct data_pg *next;
+	struct buff_node *prev; 
+	struct buff_node *next;
 }; 
 
 struct buff { 
 	uint32_t tot_cnt;
-	struct data_pg *head; 
-	struct data_pg *tail; 
+	struct buff_node *head; 
+	struct buff_node *tail; 
 };
 #endif
 /* describe a physical page addr */
@@ -149,7 +131,7 @@ struct ppa {
         uint64_t ppa;
     };
 // DAWID
-	struct dpg_node *bfa;
+	struct buff_node *buff;
 };
 
 typedef int nand_sec_status_t;
@@ -223,10 +205,8 @@ struct ssdparams {
     int pgs_per_lun;  /* # of pages per LUN (Die) */
     int pgs_per_ch;   /* # of pages per channel */
     int tt_pgs;       /* total # of pages in the SSD */
-#ifdef USE_BUFF
-	int pgs_maptbl; /* # of pages in the maptbl */ 
-	int pgs_protected; /* # of pages in the protected maptbl */ 
-#endif
+	int dirty_check_entries; /* # of pages in the maptbl */ 
+	int protected_ratio; /* # of pages in the protected maptbl */ 
 	
     int blks_per_lun; /* # of blocks per LUN */
     int blks_per_ch;  /* # of blocks per channel */
@@ -281,9 +261,9 @@ struct nand_cmd {
     int64_t stime; /* Coperd: request arrival time */
 };
 
-struct dmpg_node { /* dirty maptbl pg node */
+struct dMap_list_node { 
 	uint64_t idx; 
-	struct dmpg_node *next; 
+	struct dMap_list_node *next; 
 };
 
 struct ssd {
@@ -291,15 +271,14 @@ struct ssd {
     struct ssdparams sp;
     struct ssd_channel *ch;
     struct ppa *maptbl; /* page level mapping table */
-#ifdef USE_BUFF
-	struct ssd_buff buff;
-
+#if 1 //NAM
+	struct ppa *buff_maptbl; /* just using check buff */
 	int tt_maptbl_dpg; 
-	int tt_maptbl_flush; // number of flushes 
-	int tt_maptbl_flush_pgs; // number of flushed pages 
-	int tt_user_dat_flush_pgs; 
-	int *maptbl_state; //checked mapping table's dirty condition
-	struct dmpg_node *dmpg_list;
+	int tt_maptbl_flush_cnt; 
+	unsigned char *dirty_check; //checked mapping table's dirty condition
+	struct dMap_list_node *dMap_list;
+#endif
+#if 1 //map flush
 	struct ppa *gtd; /* page level meta mapping table */ 
 #endif
 	uint64_t *rmap;     /* reverse mapptbl, assume it's stored in OOB */
@@ -314,18 +293,18 @@ struct ssd {
 };
 
 #if 0 //NAM
-struct dpg_node {
+struct buff_node {
 	//NvmeRequest *req;
 	uint64_t lpn;
 	int64_t stime;
-	struct dpg_node *prev; 
-	struct dpg_node *next;
+	struct buff_node *prev; 
+	struct buff_node *next;
 }; 
 
 struct buff { 
 	uint32_t tot_cnt;
-	struct dpg_node *head; 
-	struct dpg_node *tail; 
+	struct buff_node *head; 
+	struct buff_node *tail; 
 };
 #endif 
 

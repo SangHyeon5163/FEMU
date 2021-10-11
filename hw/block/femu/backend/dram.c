@@ -42,9 +42,10 @@ int backend_rw(SsdDramBackend *b, QEMUSGList *qsg, uint64_t *lbal, bool is_write
     }
 
     while (sg_cur_index < qsg->nsg) {
-    	if (get_buff_tot_cnt() == BUFF_THRES)
+#if 0
+		if (get_buff_tot_cnt() == BUFF_THRES)
 			continue; 
-
+#endif
 		cur_addr = qsg->sg[sg_cur_index].base + sg_cur_byte;
         cur_len = qsg->sg[sg_cur_index].len - sg_cur_byte;
         if (dma_memory_rw(qsg->as, cur_addr, mb + mb_oft, cur_len, dir)) {
