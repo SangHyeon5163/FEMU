@@ -18,7 +18,7 @@ static uint64_t ssd_address_translation(struct ssd *ssd, NvmeRequest *req, uint6
 
 static inline bool should_gc(struct ssd *ssd)
 {
-	// femu_debug("full=%d,free=%d\n", ssd->lm.full_line_cnt, ssd->lm.free_line_cnt);
+	// femu_debug("total=%d, full=%d, free=%d, victim=%d\n", ssd->lm.tt_lines, ssd->lm.full_line_cnt, ssd->lm.free_line_cnt, ssd->lm.victim_line_cnt);
 
     return (ssd->lm.free_line_cnt <= ssd->sp.gc_thres_lines);
 }
@@ -370,7 +370,7 @@ static void ssd_init_params(struct ssdparams *spp)
     spp->secsz = 512;
     spp->secs_per_pg = 8;
     spp->pgs_per_blk = 256;
-    spp->blks_per_pl = 256; /* 16GB */
+    spp->blks_per_pl = 65; /* 16GB */
     spp->pls_per_lun = 1;
     spp->luns_per_ch = 8;
     spp->nchs = 8;
@@ -976,34 +976,17 @@ static uint64_t gc_write_translation_page(struct ssd *ssd, struct ppa *old_ppa)
     struct nand_lun *new_lun;
     uint64_t GTD_index = get_rmap_ent(ssd, old_ppa);
 
-	femu_debug("1\n");
-
     new_ppa = get_new_translation_page(ssd);
 
-	femu_debug("2\n");
-	femu_debug("GTD_index: %lu\n", GTD_index);
-	femu_debug("new_ppa ch : %u\n", new_ppa.g.ch);
-	femu_debug("new_ppa lun : %u\n", new_ppa.g.lun);
-	femu_debug("new_ppa pg : %u\n", new_ppa.g.pg);
-	femu_debug("new_ppa blk : %u\n", new_ppa.g.blk);
-    
     ssd->GTD->GTD_entries[GTD_index].map_page_ppa = new_ppa;
     /* update rmap */
 
-	femu_debug("3\n");
-
     set_rmap_ent(ssd, GTD_index, &new_ppa);
-
-	femu_debug("4\n");
 
     mark_translation_page_valid(ssd, &new_ppa);
 
-	femu_debug("5\n");
-
     /* need to advance the write pointer here */
     ssd_advance_translation_write_pointer(ssd);
-
-	femu_debug("6\n");
 
     if (ssd->sp.enable_gc_delay) {
         struct nand_cmd gcw;
@@ -1022,8 +1005,6 @@ static uint64_t gc_write_translation_page(struct ssd *ssd, struct ppa *old_ppa)
     new_lun = get_lun(ssd, &new_ppa);
     new_lun->gc_endtime = new_lun->next_lun_avail_time;
 
-	femu_debug("7\n");
-
     return 0;
 }
 #endif
@@ -1035,16 +1016,20 @@ static struct line *select_victim_line(struct ssd *ssd, bool force)
 
     victim_line = pqueue_peek(lm->victim_line_pq);
     if (!victim_line) {
+		// femu_debug("In select_victim_line : really no victim_line\n");
+        return NULL;
+    }
+						
+    if (!force && victim_line->ipc < ssd->sp.pgs_per_line / 8) {
+		// femu_debug("In select_victim_line : Not enough ipc\n");
         return NULL;
     }
 
-    if (!force && victim_line->ipc < ssd->sp.pgs_per_line / 8) {
-        return NULL;
-    }
+	// femu_debug("total=%d, full=%d, free=%d, victim=%d\n", ssd->lm.tt_lines, ssd->lm.full_line_cnt, ssd->lm.free_line_cnt, ssd->lm.victim_line_cnt);
 
     pqueue_pop(lm->victim_line_pq);
     lm->victim_line_cnt--;
-
+	
     /* victim_line is a danggling node now */
     return victim_line;
 }
@@ -1205,12 +1190,8 @@ static int do_gc(struct ssd *ssd, bool force)
                 ppa.g.pl = 0;
                 lunp = get_lun(ssd, &ppa);
 		
-				femu_debug("clean_one_translation_block start\n");
-
                 clean_one_translation_block(ssd, &ppa);
 		
-				femu_debug("clean_one_translation_block finished\n");	
-
                 mark_block_free(ssd, &ppa);
 
                 if (spp->enable_gc_delay) {
@@ -1258,8 +1239,6 @@ static int do_gc(struct ssd *ssd, bool force)
           	}
     	}
 	
-		femu_debug("*cnt : %d\n", *cnt); 
-
 		deleteDuplicate(translation_update_set, cnt);
 	
 		uint64_t GTD_index;
@@ -1270,22 +1249,14 @@ static int do_gc(struct ssd *ssd, bool force)
 		for (uint64_t i = 0; i < *cnt; i++) {
 	    	GTD_index = translation_update_set[i];
 
-	    	femu_debug("In translation update - GTD_index: %lu\n", GTD_index);
-	  
 	    	map_ppa = ssd->GTD->GTD_entries[GTD_index].map_page_ppa;
 
 	    	gc_read_page(ssd, &map_ppa);
             gc_write_translation_page(ssd, &map_ppa);
 	
-			femu_debug("8\n");
- 
 	    	mark_page_invalid(ssd, &map_ppa);
 
-			femu_debug("9\n");
-
             set_rmap_ent(ssd, INVALID_LPN, &map_ppa);
-
-			femu_debug("10\n");
 		}	
 
     }
@@ -1298,8 +1269,6 @@ static int do_gc(struct ssd *ssd, bool force)
     /* update line status */
     mark_line_free(ssd, &ppa);
     
-    femu_debug("gc finished\n");
-
     return 0;
 }
 #elif defined FTL
@@ -1313,11 +1282,12 @@ static int do_gc(struct ssd *ssd, bool force)
 
     victim_line = select_victim_line(ssd, force);
     if (!victim_line) {
+		// femu_debug("Returned NULL from select_victim_line\n");
         return -1;
     }
 
     ppa.g.blk = victim_line->id;
-    ftl_debug("GC-ing line:%d,ipc=%d,victim=%d,full=%d,free=%d\n", ppa.g.blk,
+    femu_debug("GC-ing line:%d,ipc=%d,victim=%d,full=%d,free=%d\n", ppa.g.blk,
               victim_line->ipc, ssd->lm.victim_line_cnt, ssd->lm.full_line_cnt,
               ssd->lm.free_line_cnt);
 
@@ -1729,7 +1699,7 @@ static void *ftl_thread(void *arg)
 
             /* clean one line if needed (in the background) */
             if (should_gc(ssd)) {
-				ftl_log("in ftl_thread, in should_gc\n");
+				// ftl_log("in ftl_thread, in should_gc\n");
                 do_gc(ssd, false);
             }
 			
