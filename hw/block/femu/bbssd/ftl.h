@@ -58,16 +58,17 @@ enum {
 #define CH_BITS     (7)
 
 
-#define ORG_VER
-//#define USE_BUFF
+//#define ORG_VER
+#define USE_BUFF
 //#define DAWID 
-//#define FIFO
+#define FIFO
 //#define USE_BUFF_DEBUG
 //#define DAWID_BUFF
 
 #ifdef USE_BUFF
 /* things that buffer needed */ 
-#define BUFF_SIZE 1048576
+//#define BUFF_SIZE 1048576
+#define BUFF_SIZE 1024
 #define LINE_SIZE 1 // ssd maximum parallelism 
 #define PROTECTED_RATIO 0.01
 

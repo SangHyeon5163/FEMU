@@ -638,7 +638,7 @@ static uint64_t ssd_advance_status(struct ssd *ssd, struct ppa *ppa, struct
 
     case NAND_WRITE:
         /* write: transfer data through channel first */
-		ftl_log("lun_avail_time: %ld  nand_stime: %ld  pg_wr_lat: %d\n", lun->next_lun_avail_time, nand_stime, spp->pg_wr_lat); 
+		//ftl_log("lun_avail_time: %ld  nand_stime: %ld  pg_wr_lat: %d\n", lun->next_lun_avail_time, nand_stime, spp->pg_wr_lat); 
         nand_stime = (lun->next_lun_avail_time < cmd_stime) ? cmd_stime : \
                      lun->next_lun_avail_time;
         if (ncmd->type == USER_IO) {
@@ -977,6 +977,7 @@ static uint64_t set_maptbl_pg_dirty(struct ssd *ssd, uint64_t lba)
 	uint64_t idx = get_mpg_idx(lba);
 
 	uint64_t curlat = 0, maxlat = 0; 
+	uint64_t accumulat = 0; 
 	int r; 
 
 	int tt_flush_mpgs = 0;
@@ -1054,6 +1055,7 @@ static uint64_t set_maptbl_pg_dirty(struct ssd *ssd, uint64_t lba)
 			curlat = ssd_advance_status(ssd, &ppa, &swr); 
 			maxlat = (curlat > maxlat) ? curlat : maxlat; 
 			// how can I treat this latency .. 
+			accumulat += maxlat; 
 
 			struct dmpg_node* tmp = ssd->dmpg_list; 
 			ssd->dmpg_list = ssd->dmpg_list->next; 
@@ -1064,13 +1066,13 @@ static uint64_t set_maptbl_pg_dirty(struct ssd *ssd, uint64_t lba)
 		ssd->tt_maptbl_dpg = 0; 
 		ssd->tt_maptbl_flush++; 
 		ssd->tt_maptbl_flush_pgs += tt_flush_mpgs; 
-//		ftl_log("maptbl_flush_pgs: %d\n", ssd->tt_maptbl_flush_pgs);
-		ftl_log("spp->pgs_protected: %d  tt_maptbl_flush: %d\n", spp->pgs_protected, ssd->tt_maptbl_flush); 
+//		//ftl_log("maptbl_flush_pgs: %d\n", ssd->tt_maptbl_flush_pgs);
+		//ftl_log("spp->pgs_protected: %d  tt_maptbl_flush: %d\n", spp->pgs_protected, ssd->tt_maptbl_flush); 
 	}
 //sleep:
 	/* sleep for the duration of (tt_flush_mpgs / LINE_SIZE * maxlat) */
 
-	return 0;
+	return accumulat;
 }
 #endif
 
@@ -1226,6 +1228,7 @@ static int32_t buff_write(struct ssd *ssd, NvmeRequest *req)
 	uint64_t end_lpn = (lba + len - 1) / spp->secs_per_pg; 
 	struct ppa ppa; 
 	uint64_t lpn;
+	uint64_t maxlat = 0; 
 
 	for (lpn = start_lpn; lpn <= end_lpn; lpn++) { 
 		struct dpg* newNode = (struct dpg*)malloc(sizeof(struct dpg)); 
@@ -1270,7 +1273,8 @@ static int32_t buff_write(struct ssd *ssd, NvmeRequest *req)
 
 		/* flush buffered data if buff size is full */ 
 		if (buff.tot_cnt == BUFF_THRES) { 
-			ssd_buff_flush(ssd); 
+			maxlat = ssd_buff_flush(ssd);
+			ftl_log("maxlat: %ld\n", maxlat);
 		}
 	}
 	return 0; 
@@ -1570,7 +1574,7 @@ static int32_t ssd_buff_flush_one_page(struct ssd *ssd, struct dpg_node* dpg)
 #endif
 
 #ifdef DAWID
-static int32_t ssd_buff_flush(struct ssd *ssd)
+static uint32_t ssd_buff_flush(struct ssd *ssd)
 {
 #ifdef USE_BUFF_DEBUG_L1
 	ftl_log("ssd_buff_flush ..\n"); 
@@ -1578,6 +1582,7 @@ static int32_t ssd_buff_flush(struct ssd *ssd)
 	struct ssd_buff *bp = &ssd->buff;
 	struct zcl_node* znp = bp->zcl;
 	uint64_t curlat = 0, maxlat = 0; 
+	uint64_t accumulat = 0; 
 	uint64_t idx = 0;
 
 	int tt_flush_dpgs = 0;
@@ -1600,9 +1605,13 @@ static int32_t ssd_buff_flush(struct ssd *ssd)
 			/* write one page into flash */
 			curlat = ssd_buff_flush_one_page(ssd, dpg);
 			maxlat = (curlat > maxlat) ? curlat : maxlat; 
-			
+//			ftl_log("maxlat: %ld\n", maxlat);	
+			accumulat += maxlat; 
+
 			/* update maptbl for the flushed data */
-			set_maptbl_pg_dirty(ssd, dpg->lpn); 
+			curlat = set_maptbl_pg_dirty(ssd, dpg->lpn); 
+			accumulat += curlat; 
+	//		ftl_log("curlat: %ld\n", curlat); 
 
 			/* remove request from the request table */
 			ep->head = ep->head->next;
@@ -1615,8 +1624,7 @@ static int32_t ssd_buff_flush(struct ssd *ssd)
 
 		/* remove znode from zcl */
 		bp->zcl = bp->zcl->next;
-#ifdef USE_BUFF_DEBUG_L2
-#endif
+		
 		ssd->maptbl_state[znp->mpg_idx] &= ~(1 << EXIST_IN_ZCL_BIT_SHIFT);
 		free(znp); 
 
@@ -1627,55 +1635,6 @@ static int32_t ssd_buff_flush(struct ssd *ssd)
 			goto sleep;
 #endif
 	}
-
-#if 0
-	/* 여기까지 왔다는 것은 더 flush 는 해야하는데 ZCL 은 비어 있다는 뜻 */ 
-	while(1) {	
-#if 0
-		if (!bp->mpg_value_heap->hsz) 
-			goto sleep;
-
-		if(tt_flush_dpgs > LINE_SIZE)
-			goto sleep;
-#endif
-		/* flush data pages that least increase dirty maptbl page footprint */
-#ifdef USE_BUFF_DEBUG_L1
-		show_max_heap(ssd);
-#endif
-		struct hnode* max_node = pop_max_heap(ssd);
-#ifdef USE_BUFF_DEBUG_L1
-		show_max_heap(ssd);
-#endif
-		ftl_log("max_node: %p\n", max_node); 
-		assert(max_node);
-		idx = max_node->mpg_idx; 
-
-		struct dpg_tbl_ent* ep = &bp->dpg_tbl[idx];
-
-		/* send request from dram buffer to nand flash */ 
-		uint64_t dpgs = 0;
-		while (ep->head != NULL) {
-			dpg = ep->head; 
-
-			/* write one page into flash */
-			curlat = ssd_buff_flush_one_page(ssd, dpg);
-			maxlat = (curlat > maxlat) ? curlat : maxlat; 
-
-			/* update maptbl for the flushed data */
-			set_maptbl_pg_dirty(ssd, dpg->lpn); 
-
-			/* remove request from the request table */
-			ep->head = ep->head->next;
-			free(dpg);
-
-			/* decrease the number of requests in buffer */
-			bp->tt_reqs--;
-			dpgs++;
-			tt_flush_dpgs++;
-		}
-		assert(dpgs == max_node->dpg_cnt);
-	}
-#endif
 
 	if (bp->mpg_value_heap->hsz >= 1) { 
 		struct hnode* max_node = pop_max_heap(ssd); 
@@ -1693,10 +1652,13 @@ static int32_t ssd_buff_flush(struct ssd *ssd)
 			/* write one page into flash */
 			curlat = ssd_buff_flush_one_page(ssd, dpg);
 			maxlat = (curlat > maxlat) ? curlat : maxlat; 
-	
+			accumulat += maxlat; 
+
 			/* update maptbl for the flushed data */
-			set_maptbl_pg_dirty(ssd, dpg->lpn); 
-	
+			curlat = set_maptbl_pg_dirty(ssd, dpg->lpn); 
+			accumulat += curlat; 
+	//		ftl_log("curlat: %ld\n", curlat); 
+
 			/* remove request from the request table */
 			ep->head = ep->head->next;
 			free(dpg);
@@ -1712,18 +1674,20 @@ static int32_t ssd_buff_flush(struct ssd *ssd)
 	}
 	mycnt++; 
 	ssd->tt_user_dat_flush_pgs += tt_flush_dpgs; 
-	ftl_log("user data write cnt: %d  mycnt: %d\n", ssd->tt_user_dat_flush_pgs, mycnt); 
+	//ftl_log("user data write cnt: %d  mycnt: %d\n", ssd->tt_user_dat_flush_pgs, mycnt); 
 //sleep:
 	/* sleep for the duration of (tt_flush_dpgs / LINE_SIZE * maxlat) */
-	return 0;
+	//return 0;
+	return accumulat;
 }
 #endif
 	
 #ifdef FIFO
-static int32_t ssd_buff_flush(struct ssd *ssd)
+static uint64_t ssd_buff_flush(struct ssd *ssd)
 {
 	struct ssd_buff *bp = &ssd->buff; 
 	uint64_t curlat = 0, maxlat = 0; 
+	uint64_t accumulat = 0; 
 
 	struct dpg_node* dpg; 
 #if 0
@@ -1752,13 +1716,15 @@ static int32_t ssd_buff_flush(struct ssd *ssd)
 	ssd->tt_user_dat_flush_pgs++; 
 	ftl_log("user date write cnt: %d\n", ssd->tt_user_dat_flush_pgs);
 #endif
-	for (int i = 0; i < 1235; i++) { 
+	for (int i = 0; i < 2; i++) { 
 		dpg = bp->tail; 
 
 		curlat = ssd_buff_flush_one_page(ssd, dpg); 
 		maxlat = (curlat > maxlat) ? curlat : maxlat; 
+		accumulat += maxlat; 
 
-		set_maptbl_pg_dirty(ssd, dpg->lpn); 
+		curlat = set_maptbl_pg_dirty(ssd, dpg->lpn); 
+		accumulat += curlat; 
 
 		if (bp->head == bp->tail) { 
 			bp->head = NULL; 
@@ -1774,8 +1740,8 @@ static int32_t ssd_buff_flush(struct ssd *ssd)
 		ssd->tt_user_dat_flush_pgs++; 
 		//ftl_log("user data write cnt: %d\n", ssd->tt_user_dat_flush_pgs); 
 	}
-	ftl_log("user data write cnt: %d\n", ssd->tt_user_dat_flush_pgs);
-	return 0; 
+//	ftl_log("user data write cnt: %d\n", ssd->tt_user_dat_flush_pgs);
+	return accumulat; 
 }
 #endif 
 
@@ -1926,7 +1892,7 @@ sleep:
 #endif
 
 #ifdef DAWID
-static int32_t ssd_buff_write(struct ssd *ssd, NvmeRequest *req)
+static uint64_t ssd_buff_write(struct ssd *ssd, NvmeRequest *req)
 { 
 #ifdef USE_BUFF_DEBUG_L1
 	ftl_log("ssd_buff_write .. \n");
@@ -1943,7 +1909,8 @@ static int32_t ssd_buff_write(struct ssd *ssd, NvmeRequest *req)
 	uint64_t start_lpn = lba / spp->secs_per_pg; 
 	uint64_t end_lpn = (lba + len - 1) / spp->secs_per_pg; 
 	struct ppa ppa; 
-	uint64_t lpn; 
+	uint64_t lpn;
+	uint64_t maxlat = 0;
 //	struct dpg_node* nn; 
 
 	/* Walk through all pages for the request */
@@ -2017,15 +1984,16 @@ static int32_t ssd_buff_write(struct ssd *ssd, NvmeRequest *req)
 	////	ftl_log("bp->tt_reqs: %u .. \n", bp->tt_reqs);
 #endif
 		if (bp->tt_reqs > BUFF_SIZE) { 
-			ssd_buff_flush(ssd); 
+			maxlat = ssd_buff_flush(ssd); 
+			//ftl_log("buff flush ret maxlat: %ld\n", maxlat); 
 		} 
 	} 
-	return 0; 
+	return maxlat/64; 
 } 
 #endif
 
 #ifdef FIFO
-static int32_t ssd_buff_write(struct ssd *ssd, NvmeRequest *req) 
+static uint64_t ssd_buff_write(struct ssd *ssd, NvmeRequest *req) 
 {
 	struct ssdparams *spp = &ssd->sp; 
 	struct ssd_buff *bp = &ssd->buff; 
@@ -2036,6 +2004,7 @@ static int32_t ssd_buff_write(struct ssd *ssd, NvmeRequest *req)
 	uint64_t end_lpn = (lba + len - 1) / spp->secs_per_pg; 
 	struct ppa ppa;
 	uint64_t lpn; 
+	uint64_t maxlat = 0; 
 
 	//ftl_log("slba: %ld  len: %d\n", lba, len);
 	/* Walk through all pages for the reqeust */ 
@@ -2098,11 +2067,11 @@ static int32_t ssd_buff_write(struct ssd *ssd, NvmeRequest *req)
 
 		/* flush data buffer */
 		if (bp->tt_reqs > BUFF_SIZE) { 
-			ssd_buff_flush(ssd); 
+			maxlat = ssd_buff_flush(ssd); 
 		}
 
 	}
-	return 0; 
+	return maxlat/64; 
 }
 #endif
 
@@ -2170,7 +2139,7 @@ static void *ftl_thread(void *arg)
     struct ssd *ssd = n->ssd;
     NvmeRequest *req = NULL;
     uint64_t lat = 0;
-    int rc;
+	int rc;
     int i;
 	
     while (!*(ssd->dataplane_started_ptr)) {
@@ -2196,6 +2165,7 @@ static void *ftl_thread(void *arg)
             case 1:
 #ifdef USE_BUFF
  				lat = ssd_buff_write(ssd, req); 
+				ftl_log("buff write latency error-check: %ld\n", lat); 
 #else
                 lat = ssd_write(ssd, req);
 #endif
