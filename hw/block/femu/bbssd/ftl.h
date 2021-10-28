@@ -1,4 +1,4 @@
-#define DFTL
+#define FTL
 
 #ifndef __FEMU_FTL_H
 #define __FEMU_FTL_H
@@ -58,7 +58,7 @@ enum {
 #define NOT_IN_CMT      (0)
 #define MODIFIED        (1)
 #define NOT_MODIFIED    (0)
-#define MAX_INCMT       (1000)
+#define MAX_INCMT       (10)
 
 #define INVALID_PAGE	    (0)
 #define DATA_PAGE           (1)
@@ -104,7 +104,7 @@ struct dll_entry {
 struct GTD_entry {
     int inCMT;                  /* the page that this GTD_entry pointing is in CMT or not */
     int modified;               /* the page that this GTD_entry pointing is modified or not in CMT*/
-    struct ppa *map_page;         /* pointing 1 page of maptbl*/
+    struct ppa *map_page;       /* pointing 1 page of maptbl*/
     struct ppa map_page_ppa;    /* map page of ppa */
 };
 

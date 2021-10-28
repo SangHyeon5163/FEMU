@@ -1004,6 +1004,9 @@ static void clean_one_translation_block(struct ssd *ssd, struct ppa *ppa)
 {
     struct ssdparams *spp = &ssd->sp;
     struct nand_page *pg_iter = NULL;
+	uint64_t GTD_index;
+	uint64_t lpn;
+	uint64_t mapEntry_per_page = (ssd->page_size /sizeof(struct ppa));
     int cnt = 0;
     
     for (int pg = 0; pg < spp->pgs_per_blk; pg++) {
@@ -1012,16 +1015,24 @@ static void clean_one_translation_block(struct ssd *ssd, struct ppa *ppa)
         /* there shouldn't be any free page in victim blocks */
         ftl_assert(pg_iter->status != PG_FREE);
         if (pg_iter->status == PG_VALID) {
-            gc_read_page(ssd, ppa);						// Read valid page(apply delay using ssd_advance_status)
-            gc_write_translation_page(ssd, ppa);		// Write valid page to current translation block		
+				lpn = get_rmap_ent(ssd,ppa);
+				GTD_index = lpn / mapEntry_per_page;			
+
+				if (ssd->GTD->GTD_entries[GTD_index].inCMT == IN_CMT)
+				{
+					ssd->GTD->GTD_entries[GTD_index].modified = MODIFIED; 	
+				}
+				else
+				{
+            		gc_read_page(ssd, ppa);						// Read valid page(apply delay using ssd_advance_status)
+            		gc_write_translation_page(ssd, ppa);		// Write valid page to current translation block		
             
-			set_rmap_ent(ssd, INVALID_LPN, ppa);
+					set_rmap_ent(ssd, INVALID_LPN, ppa);
 	
-            cnt++;
+            		cnt++;
+				}
         }
     }
-
-    ftl_assert(get_blk(ssd, ppa)->vpc == cnt);
 }
 
 static void clean_one_data_block(struct ssd *ssd, struct ppa *ppa, uint64_t *translation_update_set, int *cnt)
@@ -1205,13 +1216,20 @@ static int do_gc(struct ssd *ssd, bool force)
 		for (uint64_t i = 0; i < *cnt; i++) {
 	    	GTD_index = translation_update_set[i];
 
-	    	map_ppa = ssd->GTD->GTD_entries[GTD_index].map_page_ppa;
+			if (ssd->GTD->GTD_entries[GTD_index].inCMT == IN_CMT)
+			{
+				ssd->GTD->GTD_entries[GTD_index].modified = MODIFIED; 	
+			}
+			else
+			{
+	    		map_ppa = ssd->GTD->GTD_entries[GTD_index].map_page_ppa;
 
-	    	gc_read_page(ssd, &map_ppa);
-            gc_write_translation_page(ssd, &map_ppa);								// Apply delay to update translation pages
+	    		gc_read_page(ssd, &map_ppa);
+            	gc_write_translation_page(ssd, &map_ppa);							// Apply delay to update translation pages
 	
-	    	mark_page_invalid(ssd, &map_ppa);
-			set_rmap_ent(ssd, INVALID_LPN, &map_ppa);
+	    		mark_page_invalid(ssd, &map_ppa);
+				set_rmap_ent(ssd, INVALID_LPN, &map_ppa);
+			}
 		}	
 
     }
