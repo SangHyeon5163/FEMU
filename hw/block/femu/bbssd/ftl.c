@@ -1,5 +1,4 @@
 #include "ftl.h"
-int test_cnt = 0; 
 #define FEMU_DEBUG_FTL
 
 static void *ftl_thread(void *arg);
