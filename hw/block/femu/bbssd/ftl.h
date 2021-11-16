@@ -59,19 +59,21 @@ enum {
 
 
 #define USE_BUFF
-//#define USE_BUFF_DEBUG
-//#define DAWID_BUFF
+#define USE_BUFF_FIFO
+#define EUNJI
+//#define USE_BUFF_DAWID
+#define USE_BUFF_DEBUG_L1
+//#define PARTIAL_PROTECTED
 
-#ifdef USE_BUFF
 /* things that buffer needed */ 
 #define BUFF_SIZE 128
-#define LINE_SIZE 1 // ssd maximum parallelism 
 #define PROTECTED_RATIO 0.1
 
 //unsigned char dirty_option = 0x1; 
 #define DIRTY_BIT_SHIFT 0
 #define EXIST_IN_ZCL_BIT_SHIFT 1 // ZCL: Zero Cost List
 
+#ifdef USE_BUFF
 struct zcl_node { 
 	uint64_t mpg_idx; // request table maptbl pg no. 
 	struct zcl_node *next;
@@ -103,9 +105,20 @@ struct dpg_tbl_ent{
 
 struct ssd_buff { 
 	uint32_t tt_reqs;
+	/* Lock to synchronize threads to access the free buffer slot */
+	QemuMutex bf_lock;
+	QemuCond bf_fill_cond;
+	QemuCond bf_empty_cond;
+
+#ifdef USE_BUFF_FIFO
+	struct dpg_node* dpg_head; // insert into head 
+	struct dpg_node* dpg_tail; // insert into tail 
+#endif
+#ifdef USE_BUFF_DAWID
 	struct dpg_tbl_ent* dpg_tbl;
 	struct max_heap* mpg_value_heap; // cost-effectiveness of maptable page  
 	struct zcl_node* zcl; // zero cost list 
+#endif
 };
 #endif
 
@@ -189,6 +202,9 @@ struct ssdparams {
     int pls_per_lun;  /* # of planes per LUN (Die) */
     int luns_per_ch;  /* # of LUNs per channel */
     int nchs;         /* # of channels in the SSD */
+#ifdef USE_BUFF
+	int nluns;		  /* # of total LUNS in the SSD */
+#endif
 
     int pg_rd_lat;    /* NAND page read latency in nanoseconds */
     int pg_wr_lat;    /* NAND page program latency in nanoseconds */
@@ -301,6 +317,9 @@ struct ssd {
     struct rte_ring **to_poller;
     bool *dataplane_started_ptr;
     QemuThread ftl_thread;
+#ifdef USE_BUFF
+    QemuThread ftl_flush_thread;
+#endif
 };
 
 #if 0 //NAM
