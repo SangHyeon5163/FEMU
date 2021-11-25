@@ -103,16 +103,40 @@ struct dpg_tbl_ent{
 	uint64_t heap_idx; 	
 };
 
+enum {
+	DPG_LIST_RUNNING = 1, 
+	DPG_LIST_TO_FLUSH = 2, 
+	DPG_LIST_FLUSH_IN_PROGRESS = 3, 
+	DPG_LIST_FLUSH_FINISHED = 4
+};
+
+struct dpg_list {
+	QemuMutex lock;
+	int reqs;
+	struct dpg_node* head; 
+	struct dpg_node* tail;
+};
+
 struct ssd_buff { 
 	uint32_t tt_reqs;
+
+	struct dpg_list* dpg_running_list; 	
+	struct dpg_list* dpg_to_flush_list;
+	struct dpg_list* dpg_flush_list; 
+	struct dpg_list* dpg_finished_list; 
+	struct dpg_list* dpg_zombie_list; 
+
 	/* Lock to synchronize threads to access the free buffer slot */
-	QemuMutex bf_lock;
-	QemuCond bf_fill_cond;
-	QemuCond bf_empty_cond;
+	QemuMutex qlock;
+	int need_flush;
+	int need_maptbl_update;
+
+	QemuCond need_flush_cond;
+	QemuCond empty_slot_cond;
 
 #ifdef USE_BUFF_FIFO
-	struct dpg_node* dpg_head; // insert into head 
-	struct dpg_node* dpg_tail; // insert into tail 
+	struct dpg_node** dpg_list_head; // insert into head 
+	struct dpg_node** dpg_list_tail; // insert into tail 
 #endif
 #ifdef USE_BUFF_DAWID
 	struct dpg_tbl_ent* dpg_tbl;

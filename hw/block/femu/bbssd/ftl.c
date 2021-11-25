@@ -49,13 +49,14 @@ static inline void set_maptbl_ent_with_buff(struct ssd *ssd, uint64_t lpn, struc
 }
 #endif
 
-
+#if 0
 #ifdef USE_BUFF
 static uint64_t get_mpg_idx(uint64_t lba)
 { 
 	/* find index on map table page associated with lpn */ 
 	return lba >> _PMES; 
 } 
+#endif
 #endif
 
 static uint64_t ppa2pgidx(struct ssd *ssd, struct ppa *ppa)
@@ -432,17 +433,29 @@ static void ssd_init_buff(struct ssd *ssd)
 	bp->zcl = NULL;
 #endif
 
-#ifdef USE_BUFF_FIFO
-	bp->dpg_head = NULL;
-	bp->dpg_tail = NULL;
+#ifdef USE_BUFF
+	bp->dpg_running_list = (struct dpg_list*)malloc(sizeof(struct dpg_list));
+	bp->dpg_to_flush_list = (struct dpg_list*)malloc(sizeof(struct dpg_list));
+	bp->dpg_flush_list = (struct dpg_list*)malloc(sizeof(struct dpg_list));
+	bp->dpg_finished_list = (struct dpg_list*)malloc(sizeof(struct dpg_list));
+	bp->dpg_zombie_list = (struct dpg_list*)malloc(sizeof(struct dpg_list));
+
+	qemu_mutex_init(&bp->dpg_running_list->lock);
+	qemu_mutex_init(&bp->dpg_to_flush_list->lock);
+	qemu_mutex_init(&bp->dpg_flush_list->lock);
+	qemu_mutex_init(&bp->dpg_finished_list->lock);
+	qemu_mutex_init(&bp->dpg_zombie_list->lock);
+
+	qemu_mutex_init(&bp->qlock);
+	qemu_cond_init(&bp->need_flush_cond);
+	qemu_cond_init(&bp->empty_slot_cond);
+
+	bp->need_flush = 0;
+	bp->need_maptbl_update = 0;
+	
 #endif
 	/* initialize buff status */
 	bp->tt_reqs = 0;
-
-	qemu_mutex_init(&bp->bf_lock);
-	qemu_cond_init(&bp->bf_fill_cond);
-	qemu_cond_init(&bp->bf_empty_cond);
-
 
 	/* initialize dirty bit of maptbl pgs */
 	ssd->maptbl_state = g_malloc0(sizeof(int) * spp->pgs_maptbl); 
@@ -938,13 +951,12 @@ static void add_to_dirty_mpg_list(struct ssd *ssd, uint64_t fidx)
 } 
 #endif
 
-
 #ifdef USE_BUFF
 /* This function sets the maptbl page dirty and flushes maptbl 
  * if the number of dirty maptbl pages exceeds the protected number. */
 static uint64_t set_maptbl_pg_dirty(struct ssd *ssd, uint64_t lba)
 {
-
+#if 0
 	uint64_t idx = get_mpg_idx(lba);
 
 #ifdef PARTIAL_PROTECTED
@@ -955,11 +967,7 @@ static uint64_t set_maptbl_pg_dirty(struct ssd *ssd, uint64_t lba)
 #endif
 	uint64_t maxlat = 0; 
 
-	/* Mark data residing in SSD */
-	ssd->maptbl[idx].bfa = INEXIST_BUFF;
-
 #ifdef PARTIAL_PROTECTED
-
 	/* Nothing to do if maptbl page is dirty */
 	if (ssd->maptbl_state[idx] & (1 << DIRTY_BIT_SHIFT)) { 
 		return 0; 
@@ -1035,9 +1043,10 @@ static uint64_t set_maptbl_pg_dirty(struct ssd *ssd, uint64_t lba)
 		ssd->tt_maptbl_flush++; 
 		ssd->tt_maptbl_flush_pgs += tt_flush_mpgs; 
 	}
-#endif
-
 	return maxlat;
+#endif
+#endif
+	return 0;
 }
 #endif
 
@@ -1294,10 +1303,10 @@ static void add_to_heap(struct ssd *ssd, uint64_t mpg_idx)
 }
 #endif
 
-#ifdef USE_BUFF
-static int32_t ssd_buff_flush_one_page(struct ssd *ssd, struct dpg_node* dpg)
-{
 
+#ifdef USE_BUFF
+static int32_t ssd_buff_flush_one_page(struct ssd *ssd, struct dpg_node* dpg, uint64_t stime)
+{
 	uint64_t lpn;
 	struct ppa ppa; 
 	int r;
@@ -1309,7 +1318,6 @@ static int32_t ssd_buff_flush_one_page(struct ssd *ssd, struct dpg_node* dpg)
 		if (r == -1) 
 			break; 
 	} 
-	ppa = get_maptbl_ent(ssd, lpn); 
 
 	/* new write */
 	ppa = get_new_page(ssd); 
@@ -1326,8 +1334,8 @@ static int32_t ssd_buff_flush_one_page(struct ssd *ssd, struct dpg_node* dpg)
 	struct nand_cmd swr; 
 	swr.type = USER_IO; 
 	swr.cmd = NAND_WRITE; 
-	swr.stime = 0; // set zero for buffer data write
-	//swr.stime = stime; 
+	swr.stime = stime; // set zero for buffer data write
+
 	/* get latency statistics */ 
 	return ssd_advance_status(ssd, &ppa, &swr); 
 
@@ -1374,7 +1382,10 @@ static int32_t ssd_buff_flush_dawid(struct ssd *ssd)
 			free(dpg);
 
 			/* decrease the number of requests in buffer */
+			qemu_mutex_lock(&bp->qlock);
 			bp->tt_reqs--;
+			qemu_mutex_unlock(&bp->qlock);
+
 			tt_flush_dpgs++;
 		} 
 
@@ -1537,6 +1548,56 @@ static int32_t ssd_buff_flush_fifo(struct ssd *ssd)
 #ifdef USE_BUFF_DEBUG_L1
 	ftl_log("ssd_buff_flush_fifo ..\n"); 
 #endif
+	//struct ssdparams *spp = &ssd->sp;
+	struct ssd_buff *bp = &ssd->buff;
+	uint64_t curlat = 0, maxlat = 0; 
+
+	int tt_flush_dpgs = 0;
+	uint64_t stime = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
+	uint64_t now;
+
+	// Don't need to lock for the flush list. This is the only one thread 
+	// that accesses this list. 
+	struct dpg_node* dpg = bp->dpg_flush_list->head;
+	struct dpg_node* prev_dpg;
+
+	/* send request from dram buffer to nand flash */ 
+	while (dpg) {
+		/* write one page into flash */
+		curlat = ssd_buff_flush_one_page(ssd, dpg, stime);
+		maxlat = (curlat > maxlat) ? curlat : maxlat; 
+
+		/* update maptbl for the flushed data */
+		set_maptbl_pg_dirty(ssd, dpg->lpn); 
+
+		/* remove request from the request table */
+		prev_dpg = dpg;
+		dpg = dpg->next;
+		free(prev_dpg);
+
+		tt_flush_dpgs++;
+	}
+#ifdef USE_BUFF_DEBUG_L1
+	ftl_log("tt_flush_dpgs = %d\n", tt_flush_dpgs);
+#endif
+	/* sleep during max latency */
+	while(1) {
+		now = qemu_clock_get_ns(QEMU_CLOCK_REALTIME); 
+		if(now > stime + maxlat)
+			break;
+	}
+
+	return 0;
+}
+#endif
+
+#if 0
+static int32_t ssd_buff_flush_fifo(struct ssd *ssd)
+{
+#if 0
+#ifdef USE_BUFF_DEBUG_L1
+	ftl_log("ssd_buff_flush_fifo ..\n"); 
+#endif
 	struct ssdparams *spp = &ssd->sp;
 	struct ssd_buff *bp = &ssd->buff;
 	uint64_t curlat = 0, maxlat = 0; 
@@ -1576,10 +1637,82 @@ static int32_t ssd_buff_flush_fifo(struct ssd *ssd)
 #endif
 	
 	return maxlat;
+#endif
+	return 0;
 }
 #endif
-	
 
+static int insert_dpg_list(struct dpg_list* list, struct dpg_node* nn)
+{
+	int ret; 
+
+	// enqueue at a tail and dequeue at a head 
+	qemu_mutex_lock(&list->lock);
+
+	nn->next = NULL; 
+	nn->prev = list->tail;
+
+	if(list->tail)
+		list->tail->next = nn;
+
+	if(list->head == NULL)
+		list->head = nn;
+
+	list->tail = nn;
+	ret = ++list->reqs;
+	qemu_mutex_unlock(&list->lock);
+	
+	return ret; 
+}
+
+
+static void move_dpg_list(struct dpg_list* src, struct dpg_list* dest)
+{
+	qemu_mutex_lock(&src->lock);
+	qemu_mutex_lock(&dest->lock);
+
+	assert(dest!=NULL);
+	assert(src!=NULL);
+
+	// Append a src list into the tail of dest list. 	
+	if(dest->tail) 
+		dest->tail->next = src->head; 
+
+	if(src->head)
+		src->head->prev = dest->tail;
+
+	dest->tail = src->tail; 
+
+	if(dest->head == NULL)
+		dest->head = src->head; 
+
+	dest->reqs += src->reqs; 
+
+	src->head = NULL;
+	src->tail = NULL;
+	src->reqs = 0;
+
+	qemu_mutex_lock(&dest->lock);
+	qemu_mutex_lock(&src->lock);
+
+	return;
+
+}
+
+#if 0
+static void splice_dpg_list(struct dpg_list* src, struct dpg_list* dest)
+{
+	// We can do this using CAS. 
+	qemu_mutex_lock(&src->lock);
+	qemu_mutex_lock(&dest->lock);
+
+	dest = src;
+	src = NULL;
+
+	qemu_mutex_lock(&dest->lock);
+	qemu_mutex_lock(&src->lock);
+}
+#endif
 #ifdef USE_BUFF_FIFO
 static uint64_t ssd_buff_write_fifo(struct ssd *ssd, NvmeRequest *req)
 { 
@@ -1597,6 +1730,7 @@ static uint64_t ssd_buff_write_fifo(struct ssd *ssd, NvmeRequest *req)
 	int len = req->nlb; 
 	uint64_t start_lpn = lba / spp->secs_per_pg; 
 	uint64_t end_lpn = (lba + len - 1) / spp->secs_per_pg; 
+	struct dpg_node* nn;
 	struct ppa ppa; 
 	uint64_t lpn; 
 
@@ -1605,35 +1739,36 @@ static uint64_t ssd_buff_write_fifo(struct ssd *ssd, NvmeRequest *req)
 	/* Walk through all pages for the request */
 	for (lpn = start_lpn; lpn <= end_lpn; lpn++) { 
 
-		/* insert ssd request into request table */	
-		/* request table is used to flush data buffer associated with the
- 		 * maptbl page */
-		struct dpg_node* nn = g_malloc0(sizeof(struct dpg_node)); 
+		/* wait until an empty slot is ready in buffer */
+		qemu_mutex_lock(&bp->qlock);
+		while(bp->tt_reqs == BUFF_SIZE)
+			qemu_cond_wait(&bp->empty_slot_cond, &bp->qlock);
+		qemu_mutex_unlock(&bp->qlock);
 
-		if (!nn) { 
-			ftl_log("nn ERR\n"); 
-		} 
+		/* Invalidate data and reclaim buffer slots */
+		move_dpg_list(bp->dpg_finished_list, bp->dpg_zombie_list);
 
-		/* fill the request information */
-		nn->lpn = lpn; 
-		nn->stime = req->stime; 
+		struct dpg_node* zp = bp->dpg_zombie_list->head;
+		struct dpg_node* prev_zp;
 
-		/* insert a new request into the request table */ 
-		nn->next = NULL; 
-		nn->prev = bp->dpg_tail;
-		if(bp->dpg_tail)
-			bp->dpg_tail->next = nn;
+		while(zp) {
+			uint64_t lpn = zp->lpn;
+			if(ssd->maptbl[lpn].bfa == zp) 
+				ssd->maptbl[lpn].bfa = INEXIST_BUFF;
+			prev_zp = zp;
+			zp = zp->next;
+			free(prev_zp);
 
-		if(bp->dpg_head == NULL)
-			bp->dpg_head = nn;
+			bp->dpg_zombie_list->reqs--;
+		}
 
-		bp->dpg_tail = nn;
+		assert(bp->dpg_zombie_list->reqs==0);
 
 		/* increase number of requests in buffer */	
+		qemu_mutex_lock(&bp->qlock);
 		bp->tt_reqs++;
-#ifdef USE_BUFF_DEBUG_L1
-//		ftl_log("tt_reqs = %d lpn = %lu\n", bp->tt_reqs, nn->lpn);
-#endif
+		qemu_mutex_unlock(&bp->qlock);
+
 
 		/* update mapping table entry to point to buffer address */ 
 		ppa = get_maptbl_ent(ssd, lpn); 
@@ -1644,15 +1779,31 @@ static uint64_t ssd_buff_write_fifo(struct ssd *ssd, NvmeRequest *req)
 			set_rmap_ent(ssd, INVALID_LPN, &ppa); 
 		} 
 
+		/* flush data buffer */ 
+#ifdef USE_BUFF_FIFO	
+		if(!(nn=g_malloc0(sizeof(struct dpg_node)))){
+			ftl_log("Failed to allocate dpg_node\n"); 
+		} 
+
+		/* fill the request information */
+		nn->lpn = lpn; 
+		nn->stime = req->stime; 
+
 		/* update maptbl entry with buffer address */
 		set_maptbl_ent_with_buff(ssd, lpn, nn); 
 
-		/* flush data buffer */ 
-#ifdef USE_BUFF_FIFO
-		//if (bp->tt_reqs > BUFF_SIZE) { 
-		if (bp->tt_reqs >= spp->nluns) { 
-			lat = ssd_buff_flush_fifo(ssd); 
-		} 
+
+		/* insert a new request into the running dpg_list */ 
+		int running_reqs = insert_dpg_list(bp->dpg_running_list, nn); 
+
+		if (running_reqs >= spp->nluns) { 
+			move_dpg_list(bp->dpg_running_list, bp->dpg_to_flush_list);
+
+			qemu_mutex_lock(&bp->qlock);
+			bp->need_flush = 1;
+			qemu_cond_signal(&bp->need_flush_cond);
+			qemu_mutex_unlock(&bp->qlock);
+		}
 #endif
 #ifdef USE_BUFF_DAWID
 		if (bp->tt_reqs > BUFF_SIZE) { 
@@ -1800,32 +1951,37 @@ static void *ftl_thread(void *arg)
 }
 
 #ifdef USE_BUFF
+
 static void *ftl_flush_thread(void *arg)
 {
     FemuCtrl *n = (FemuCtrl *)arg;
     struct ssd *ssd = n->ssd;
-	struct ssdparams *spp = &ssd->sp; 
+//	struct ssdparams *spp = &ssd->sp; 
 	struct ssd_buff* bp = &ssd->buff;
 
-#if 0
-    NvmeRequest *req = NULL;
-    uint64_t lat = 0;
-    int rc;
-    int i;
-#endif
-	
 	while(1) {
+        usleep(10000000);
+		qemu_mutex_lock(&bp->qlock);
+		while(!bp->need_flush)
+			qemu_cond_wait(&bp->need_flush_cond, &bp->qlock);
+		bp->need_flush = 0;
+		qemu_mutex_unlock(&bp->qlock);
 
-		qemu_mutex_lock(bp->bf_lock);
-
-		/* check if write-back is needed */
-		while(bp->tt->reqs < spp->nluns)
-			qemu_cond_wait(bp->bf_fill_cond, &bp->bf_lock);	
-
-		qemu_mutex_unlock(bp->bf_lock);
+		/**************************/
+		/*		start flushing    */
+		/**************************/
+		ftl_log("ftl_flush_thread wakes up. start flushing. \n");
+		move_dpg_list(bp->dpg_to_flush_list, bp->dpg_flush_list);
 
 		/* do flush */
+#ifdef USE_BUFF_FIFO
+		ssd_buff_flush_fifo(ssd);
+#endif
+		move_dpg_list(bp->dpg_flush_list, bp->dpg_finished_list);
 
+		qemu_mutex_lock(&bp->qlock);
+		qemu_cond_signal(&bp->empty_slot_cond);
+		qemu_mutex_unlock(&bp->qlock);
 	}
     return NULL;
 }
