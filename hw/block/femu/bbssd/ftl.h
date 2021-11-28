@@ -62,7 +62,7 @@ enum {
 #define USE_BUFF_FIFO
 #define EUNJI
 //#define USE_BUFF_DAWID
-#define USE_BUFF_DEBUG_L1
+//#define USE_BUFF_DEBUG_L1
 //#define PARTIAL_PROTECTED
 
 /* things that buffer needed */ 
@@ -112,13 +112,13 @@ enum {
 
 struct dpg_list {
 	QemuMutex lock;
-	int reqs;
+	uint64_t reqs;
 	struct dpg_node* head; 
 	struct dpg_node* tail;
 };
 
 struct ssd_buff { 
-	uint32_t tt_reqs;
+	uint64_t tt_reqs;
 
 	struct dpg_list* dpg_running_list; 	
 	struct dpg_list* dpg_to_flush_list;
@@ -129,6 +129,7 @@ struct ssd_buff {
 	/* Lock to synchronize threads to access the free buffer slot */
 	QemuMutex qlock;
 	int need_flush;
+	int flush_in_progress;
 	int need_maptbl_update;
 
 	QemuCond need_flush_cond;

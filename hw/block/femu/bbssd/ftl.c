@@ -405,7 +405,9 @@ static void ssd_init_rmap(struct ssd *ssd)
 #ifdef USE_BUFF
 static void ssd_init_gtd(struct ssd *ssd)
 {
+#ifdef USE_BUFF_DEBUG
 	ftl_log("ssd_init_gtd ... \n");
+#endif
 	struct ssdparams *spp = &ssd->sp; 
 
 	ssd->gtd = g_malloc0(sizeof(struct ppa) * spp->pgs_maptbl); 
@@ -419,7 +421,9 @@ static void ssd_init_gtd(struct ssd *ssd)
 #ifdef USE_BUFF
 static void ssd_init_buff(struct ssd *ssd)
 {
+#ifdef USE_BUFF_DEBUG
 	ftl_log("ssd_init_buff ... \n");
+#endif
 	struct ssdparams *spp = &ssd->sp; 
 	struct ssd_buff *bp = &ssd->buff; 
 
@@ -451,6 +455,7 @@ static void ssd_init_buff(struct ssd *ssd)
 	qemu_cond_init(&bp->empty_slot_cond);
 
 	bp->need_flush = 0;
+	bp->flush_in_progress = 0;
 	bp->need_maptbl_update = 0;
 	
 #endif
@@ -982,7 +987,7 @@ static uint64_t set_maptbl_pg_dirty(struct ssd *ssd, uint64_t lba)
 	/* increment the number of dirty maptbl pages */ 
 	ssd->tt_maptbl_dpg++; 
 
-#ifdef USE_BUFF_DEBUG_L1
+#ifdef USE_BUFF_EBUG_L1
 	ftl_log("tt_maptbl_dpgs = %d protected = %d\n", ssd->tt_maptbl_dpg, spp->pgs_protected);
 #endif
 
@@ -1342,6 +1347,7 @@ static int32_t ssd_buff_flush_one_page(struct ssd *ssd, struct dpg_node* dpg, ui
 }
 #endif
 
+#if 0
 #ifdef USE_BUFF_DAWID
 static int32_t ssd_buff_flush_dawid(struct ssd *ssd)
 {
@@ -1452,7 +1458,6 @@ sleep:
 	return 0;
 }
 #endif
-	
 
 #ifdef USE_BUFF_DAWID
 static uint64_t ssd_buff_write_dawid(struct ssd *ssd, NvmeRequest *req)
@@ -1540,26 +1545,27 @@ static uint64_t ssd_buff_write_dawid(struct ssd *ssd, NvmeRequest *req)
 	return 0; 
 } 
 #endif
+#endif
 
 
 #ifdef USE_BUFF_FIFO
-static int32_t ssd_buff_flush_fifo(struct ssd *ssd)
+static uint64_t ssd_buff_flush_fifo(struct ssd *ssd)
 {
-#ifdef USE_BUFF_DEBUG_L1
+#ifdef USE_BUFF_DEBUG
 	ftl_log("ssd_buff_flush_fifo ..\n"); 
 #endif
 	//struct ssdparams *spp = &ssd->sp;
 	struct ssd_buff *bp = &ssd->buff;
 	uint64_t curlat = 0, maxlat = 0; 
 
-	int tt_flush_dpgs = 0;
+	uint64_t tt_flush_dpgs = 0;
 	uint64_t stime = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
 	uint64_t now;
 
 	// Don't need to lock for the flush list. This is the only one thread 
 	// that accesses this list. 
 	struct dpg_node* dpg = bp->dpg_flush_list->head;
-	struct dpg_node* prev_dpg;
+//	struct dpg_node* prev_dpg;
 
 	/* send request from dram buffer to nand flash */ 
 	while (dpg) {
@@ -1571,14 +1577,14 @@ static int32_t ssd_buff_flush_fifo(struct ssd *ssd)
 		set_maptbl_pg_dirty(ssd, dpg->lpn); 
 
 		/* remove request from the request table */
-		prev_dpg = dpg;
+//		prev_dpg = dpg;
 		dpg = dpg->next;
-		free(prev_dpg);
+//		free(prev_dpg);
 
 		tt_flush_dpgs++;
 	}
 #ifdef USE_BUFF_DEBUG_L1
-	ftl_log("tt_flush_dpgs = %d\n", tt_flush_dpgs);
+	ftl_log("tt_flush_dpgs = %ld\n", tt_flush_dpgs);
 #endif
 	/* sleep during max latency */
 	while(1) {
@@ -1587,7 +1593,7 @@ static int32_t ssd_buff_flush_fifo(struct ssd *ssd)
 			break;
 	}
 
-	return 0;
+	return tt_flush_dpgs;
 }
 #endif
 
@@ -1669,17 +1675,50 @@ static int insert_dpg_list(struct dpg_list* list, struct dpg_node* nn)
 static void move_dpg_list(struct dpg_list* src, struct dpg_list* dest)
 {
 	qemu_mutex_lock(&src->lock);
+
+	if(!src->reqs){
+		qemu_mutex_unlock(&src->lock);
+		return; 
+	}
 	qemu_mutex_lock(&dest->lock);
 
 	assert(dest!=NULL);
 	assert(src!=NULL);
 
-	// Append a src list into the tail of dest list. 	
-	if(dest->tail) 
-		dest->tail->next = src->head; 
+//	ftl_log("move_dpg_list: src = %ld reqs, dest = %ld reqs\n", src->reqs, dest->reqs);
+	struct dpg_node* tmp; 
+	uint64_t reqs;
 
-	if(src->head)
+	tmp = src->head;
+	reqs = 0;
+	while(tmp && reqs < src->reqs) {
+//		ftl_log("src lpn = %ld ->\n", tmp->lpn);
+		tmp = tmp->next;
+		reqs++;
+	}
+//	ftl_log(" total reqs = %ld, src->reqs = %ld\n", reqs, src->reqs);
+	assert(src->reqs == reqs);
+
+	tmp = src->head;
+	reqs = 0;
+	while(tmp && reqs < dest->reqs) {
+//		ftl_log("dest lpn = %ld ->\n", tmp->lpn);
+		tmp = tmp->next;
+		reqs++;
+	}
+//	ftl_log(" total reqs = %ld, dest->reqs %ld\n", reqs, dest->reqs);
+	assert(dest->reqs == reqs);
+	
+	// Append a src list into the tail of dest list. 	
+	if(dest->tail) {
+		assert(dest->tail->next == NULL);
+		dest->tail->next = src->head; 
+	}
+
+	if(src->head){
+		assert(src->head->prev == NULL);
 		src->head->prev = dest->tail;
+	}
 
 	dest->tail = src->tail; 
 
@@ -1692,8 +1731,8 @@ static void move_dpg_list(struct dpg_list* src, struct dpg_list* dest)
 	src->tail = NULL;
 	src->reqs = 0;
 
-	qemu_mutex_lock(&dest->lock);
-	qemu_mutex_lock(&src->lock);
+	qemu_mutex_unlock(&dest->lock);
+	qemu_mutex_unlock(&src->lock);
 
 	return;
 
@@ -1716,7 +1755,7 @@ static void splice_dpg_list(struct dpg_list* src, struct dpg_list* dest)
 #ifdef USE_BUFF_FIFO
 static uint64_t ssd_buff_write_fifo(struct ssd *ssd, NvmeRequest *req)
 { 
-#ifdef USE_BUFF_DEBUG_L1
+#ifdef USE_BUFF_DEBUG
 	ftl_log("ssd_buff_write_fifo .. \n");
 #endif
 	/* FEMU maintains data in dram space. When buffer is used, we only update
@@ -1741,15 +1780,25 @@ static uint64_t ssd_buff_write_fifo(struct ssd *ssd, NvmeRequest *req)
 
 		/* wait until an empty slot is ready in buffer */
 		qemu_mutex_lock(&bp->qlock);
-		while(bp->tt_reqs == BUFF_SIZE)
+		while(!(bp->tt_reqs < BUFF_SIZE)){
+#ifdef USE_BUFF_DEBUG
+			ftl_log("ftl_thread: sleep on empty_slot_cond\n");
+#endif
 			qemu_cond_wait(&bp->empty_slot_cond, &bp->qlock);
+		}
+
+#ifdef USE_BUFF_DEBUG
+		ftl_log("ftl_thread: wakes up on empty_slot_cond\n");
+#endif
 		qemu_mutex_unlock(&bp->qlock);
 
 		/* Invalidate data and reclaim buffer slots */
 		move_dpg_list(bp->dpg_finished_list, bp->dpg_zombie_list);
 
+//		ftl_log("ftl_thread reaps zombies\n");
 		struct dpg_node* zp = bp->dpg_zombie_list->head;
 		struct dpg_node* prev_zp;
+		uint64_t reqs = 0;
 
 		while(zp) {
 			uint64_t lpn = zp->lpn;
@@ -1760,11 +1809,15 @@ static uint64_t ssd_buff_write_fifo(struct ssd *ssd, NvmeRequest *req)
 			free(prev_zp);
 
 			bp->dpg_zombie_list->reqs--;
+			reqs++;
 		}
 
 		assert(bp->dpg_zombie_list->reqs==0);
+		bp->dpg_zombie_list->head = NULL;
+		bp->dpg_zombie_list->tail = NULL;
 
 		/* increase number of requests in buffer */	
+//		ftl_log("new_req: %ld total_reqs: %ld\n", lpn, bp->tt_reqs);
 		qemu_mutex_lock(&bp->qlock);
 		bp->tt_reqs++;
 		qemu_mutex_unlock(&bp->qlock);
@@ -1797,11 +1850,15 @@ static uint64_t ssd_buff_write_fifo(struct ssd *ssd, NvmeRequest *req)
 		int running_reqs = insert_dpg_list(bp->dpg_running_list, nn); 
 
 		if (running_reqs >= spp->nluns) { 
-			move_dpg_list(bp->dpg_running_list, bp->dpg_to_flush_list);
-
 			qemu_mutex_lock(&bp->qlock);
-			bp->need_flush = 1;
-			qemu_cond_signal(&bp->need_flush_cond);
+			if(!bp->flush_in_progress) {
+				bp->need_flush = 1;
+				move_dpg_list(bp->dpg_running_list, bp->dpg_to_flush_list);
+#ifdef USE_BUFF_DEBUG
+				ftl_log("Signal to need flush\n");
+#endif
+				qemu_cond_signal(&bp->need_flush_cond);
+			}
 			qemu_mutex_unlock(&bp->qlock);
 		}
 #endif
@@ -1958,28 +2015,49 @@ static void *ftl_flush_thread(void *arg)
     struct ssd *ssd = n->ssd;
 //	struct ssdparams *spp = &ssd->sp; 
 	struct ssd_buff* bp = &ssd->buff;
+	uint64_t tt_flush_dpgs;
 
 	while(1) {
-        usleep(10000000);
+        //usleep(10000000);
 		qemu_mutex_lock(&bp->qlock);
-		while(!bp->need_flush)
+		while(!bp->need_flush){
+#ifdef USE_BUFF_DEBUG
+			ftl_log("ftl_flush_thread: sleep on need_flush_cond\n");
+#endif
 			qemu_cond_wait(&bp->need_flush_cond, &bp->qlock);
+		}
+#ifdef USE_BUFF_DEBUG
+		ftl_log("ftl_flush_thread: wakes up on need_flush_cond\n");
+#endif
 		bp->need_flush = 0;
+		bp->flush_in_progress = 1;
 		qemu_mutex_unlock(&bp->qlock);
 
 		/**************************/
 		/*		start flushing    */
 		/**************************/
-		ftl_log("ftl_flush_thread wakes up. start flushing. \n");
+#ifdef USE_BUFF_DEBUG
+		ftl_log("ftl_flush_thread starts flushing. \n");
+#endif
 		move_dpg_list(bp->dpg_to_flush_list, bp->dpg_flush_list);
 
 		/* do flush */
 #ifdef USE_BUFF_FIFO
-		ssd_buff_flush_fifo(ssd);
+		tt_flush_dpgs = ssd_buff_flush_fifo(ssd);
+#endif
+		/* finished flush */
+#ifdef USE_BUFF_DEBUG
+		ftl_log("ftl_flush_thread finished flushing\n");
 #endif
 		move_dpg_list(bp->dpg_flush_list, bp->dpg_finished_list);
 
 		qemu_mutex_lock(&bp->qlock);
+		bp->flush_in_progress = 0;
+
+#ifdef USE_BUFF_DEBUG
+		ftl_log("flush_thread: signal empty_slot_cond\n");
+#endif
+		bp->tt_reqs -= tt_flush_dpgs;
 		qemu_cond_signal(&bp->empty_slot_cond);
 		qemu_mutex_unlock(&bp->qlock);
 	}
