@@ -66,7 +66,7 @@ enum {
 //#define PARTIAL_PROTECTED
 
 /* things that buffer needed */ 
-#define BUFF_SIZE 128
+#define BUFF_SIZE 1048576
 #define PROTECTED_RATIO 0.1
 
 //unsigned char dirty_option = 0x1; 
