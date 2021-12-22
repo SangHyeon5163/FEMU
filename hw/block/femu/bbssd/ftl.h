@@ -60,15 +60,15 @@ enum {
 
 //#define ORG_VER
 #define USE_BUFF
-//#define DAWID 
-#define FIFO
+#define DAWID 
+//#define FIFO
 //#define USE_BUFF_DEBUG
 //#define DAWID_BUFF
 
 #ifdef USE_BUFF
 /* things that buffer needed */ 
 //#define BUFF_SIZE 1048576
-#define BUFF_SIZE 1024
+#define BUFF_SIZE 1048576
 #define LINE_SIZE 1 // ssd maximum parallelism 
 #define PROTECTED_RATIO 0.01
 
@@ -111,6 +111,9 @@ struct ssd_buff {
 	struct dpg_tbl_ent* dpg_tbl;
 	struct max_heap* mpg_value_heap; // cost-effectiveness of maptable page  
 	struct zcl_node* zcl; // zero cost list 
+	struct dpg_node *future_flush_list_head;
+	struct dpg_node *future_flush_list_tail;
+	uint32_t future_flush_list_cnt; 
 #else
 	uint32_t tt_reqs; 
 	struct dpg_node *head; 

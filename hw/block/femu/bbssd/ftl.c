@@ -452,6 +452,9 @@ static void ssd_init_buff(struct ssd *ssd)
 	/* initialize buff status */
 	bp->tt_reqs = 0;
 	bp->zcl = NULL;
+	bp->future_flush_list_head = NULL; 
+	bp->future_flush_list_tail = NULL;
+	bp->future_flush_list_cnt = 0;
 
 	/* initialize dirty bit of maptbl pgs */
 	ssd->maptbl_state = g_malloc0(sizeof(int) * spp->pgs_maptbl); 
@@ -1588,6 +1591,36 @@ static uint32_t ssd_buff_flush(struct ssd *ssd)
 	int tt_flush_dpgs = 0;
 	struct dpg_node* dpg;
 
+	/* check the future flush list */ 
+	if (bp->future_flush_list_cnt > 64) { // Channel Cnt 
+		// flush 진행,, Channel cnt 만큼
+		for (int i = 0; i < 64; i++) { 
+			dpg = bp->future_flush_list_head; 
+			
+			/* write one page into flash */ 
+			curlat = ssd_buff_flush_one_page(ssd, dpg); 
+			maxlat = (curlat > maxlat) ? curlat : maxlat; 
+			accumulat += maxlat; 
+
+			/* update maptbl for the flushed data */ 
+			curlat = set_maptbl_pg_dirty(ssd, dpg->lpn); 
+			accumulat += curlat; 
+			
+			/* remove request from the request table */ 
+			bp->future_flush_list_head = bp->future_flush_list_head->next; 
+			free(dpg); 
+
+			/* decrease the number of requests in buffer */ 
+			bp->tt_reqs--; 
+			bp->future_flush_list_cnt--;
+			tt_flush_dpgs++; 
+			
+		}
+		//ftl_log("future cnt: %d\n", bp->future_flush_list_cnt);
+
+		return accumulat; 
+	} 
+
 	/* flush data pages of which maptbl pages are in zcl */
 	while (znp!= NULL) { 
 		idx = znp->mpg_idx;  // idx for request table
@@ -1600,8 +1633,10 @@ static uint32_t ssd_buff_flush(struct ssd *ssd)
 		/* send request from dram buffer to nand flash */ 
 		//bp->head = NULL;
 		while (ep->head != NULL) { 
-			dpg = ep->head; 
-
+			dpg = ep->head;
+			ep->head = ep->head->next;  
+			dpg->next = NULL;
+#if 0 
 			/* write one page into flash */
 			curlat = ssd_buff_flush_one_page(ssd, dpg);
 			maxlat = (curlat > maxlat) ? curlat : maxlat; 
@@ -1620,12 +1655,21 @@ static uint32_t ssd_buff_flush(struct ssd *ssd)
 			/* decrease the number of requests in buffer */
 			bp->tt_reqs--;
 			tt_flush_dpgs++;
+#endif
+			if (!bp->future_flush_list_head & !bp->future_flush_list_tail) { 
+				bp->future_flush_list_head = dpg; 
+				bp->future_flush_list_tail = dpg;
+			} else { 
+				bp->future_flush_list_tail->next = dpg;
+				bp->future_flush_list_tail = bp->future_flush_list_tail->next; 
+			}
+			bp->future_flush_list_cnt++;	
 		} 
 
 		/* remove znode from zcl */
 		bp->zcl = bp->zcl->next;
 		
-		ssd->maptbl_state[znp->mpg_idx] &= ~(1 << EXIST_IN_ZCL_BIT_SHIFT);
+		ssd->maptbl_state[znp->mpg_idx] &= ~(1 << EXIST_IN_ZCL_BIT_SHIFT); // off
 		free(znp); 
 
 		znp = bp->zcl;
@@ -1645,10 +1689,12 @@ static uint32_t ssd_buff_flush(struct ssd *ssd)
 		struct dpg_tbl_ent* ep = &bp->dpg_tbl[idx];
 
 		/* send request from dram buffer to nand flash */ 
-		uint64_t dpgs = 0;
+		//uint64_t dpgs = 0;
 		while (ep->head != NULL) {
 			dpg = ep->head; 
-
+			ep->head = ep->head->next; 
+			dpg->next = NULL;
+#if 0
 			/* write one page into flash */
 			curlat = ssd_buff_flush_one_page(ssd, dpg);
 			maxlat = (curlat > maxlat) ? curlat : maxlat; 
@@ -1667,8 +1713,17 @@ static uint32_t ssd_buff_flush(struct ssd *ssd)
 			bp->tt_reqs--;
 			dpgs++;
 			tt_flush_dpgs++;
+#endif
+			if (!bp->future_flush_list_head & !bp->future_flush_list_tail) { 
+				bp->future_flush_list_head = dpg; 
+				bp->future_flush_list_tail = dpg; 
+			} else { 
+				bp->future_flush_list_tail->next = dpg; 
+				bp->future_flush_list_tail = bp->future_flush_list_tail->next; 
+			}
+			bp->future_flush_list_cnt++; 
 		}
-		assert(dpgs == max_node->dpg_cnt);
+		//assert(dpgs == max_node->dpg_cnt);
 	
 		//ftl_log("flush dpgs: %d\n", tt_flush_dpgs);
 	}
@@ -1678,7 +1733,7 @@ static uint32_t ssd_buff_flush(struct ssd *ssd)
 //sleep:
 	/* sleep for the duration of (tt_flush_dpgs / LINE_SIZE * maxlat) */
 	//return 0;
-	return accumulat;
+	return 0;
 }
 #endif
 	
@@ -1716,7 +1771,7 @@ static uint64_t ssd_buff_flush(struct ssd *ssd)
 	ssd->tt_user_dat_flush_pgs++; 
 	ftl_log("user date write cnt: %d\n", ssd->tt_user_dat_flush_pgs);
 #endif
-	for (int i = 0; i < 2; i++) { 
+	for (int i = 0; i < 64; i++) { 
 		dpg = bp->tail; 
 
 		curlat = ssd_buff_flush_one_page(ssd, dpg); 
@@ -2164,8 +2219,8 @@ static void *ftl_thread(void *arg)
             switch (req->is_write) {
             case 1:
 #ifdef USE_BUFF
- 				lat = ssd_buff_write(ssd, req); 
-				ftl_log("buff write latency error-check: %ld\n", lat); 
+ 		lat = ssd_buff_write(ssd, req); 
+		//ftl_log("buff write latency error-check: %ld\n", lat); 
 #else
                 lat = ssd_write(ssd, req);
 #endif
