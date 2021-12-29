@@ -61,6 +61,7 @@ enum {
 //#define ORG_VER
 #define USE_BUFF
 #define DAWID 
+#define ASYNCH
 //#define FIFO
 //#define USE_BUFF_DEBUG
 //#define DAWID_BUFF
@@ -105,15 +106,31 @@ struct dpg_tbl_ent{
 	uint64_t heap_idx; 	
 };
 
+struct dpg_list { 
+	QemuMutex lock; 
+	uint64_t reqs; 
+	struct dpg_node *head; 
+	struct dpg_node *tail; 
+}; 
+
+struct status { 
+	QemuMutex lock; 
+	uint32_t tt_reqs; 
+}; 
+
 struct ssd_buff {
 #ifdef DAWID
-	uint32_t tt_reqs;
+	//QemuMutex bp_lock;
+	//uint32_t tt_reqs;
+	struct status* status;
 	struct dpg_tbl_ent* dpg_tbl;
 	struct max_heap* mpg_value_heap; // cost-effectiveness of maptable page  
 	struct zcl_node* zcl; // zero cost list 
-	struct dpg_node *future_flush_list_head;
-	struct dpg_node *future_flush_list_tail;
-	uint32_t future_flush_list_cnt; 
+//	struct dpg_node *future_flush_list_head;
+//	struct dpg_node *future_flush_list_tail;
+//	uint32_t future_flush_list_cnt;
+	struct dpg_list *dpg_to_flush_list; 
+	struct dpg_list *dpg_flush_list; 
 #else
 	uint32_t tt_reqs; 
 	struct dpg_node *head; 
@@ -315,6 +332,7 @@ struct ssd {
     struct rte_ring **to_poller;
     bool *dataplane_started_ptr;
     QemuThread ftl_thread;
+    QemuThread ftl_flush_thread; 
 };
 
 #if 0 //NAM
