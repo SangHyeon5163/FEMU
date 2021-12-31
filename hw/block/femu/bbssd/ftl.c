@@ -672,6 +672,7 @@ static uint64_t ssd_advance_status(struct ssd *ssd, struct ppa *ppa, struct
             lun->next_lun_avail_time = nand_stime + spp->pg_wr_lat;
         }
         lat = lun->next_lun_avail_time - cmd_stime;
+	ftl_log("next: %ld\n", lun->next_lun_avail_time);
 
 #if 0
         chnl_stime = (ch->next_ch_avail_time < cmd_stime) ? cmd_stime : \
@@ -1039,6 +1040,7 @@ static uint64_t set_maptbl_pg_dirty(struct ssd *ssd, uint64_t lba)
 		//while (ssd->dmpg_list != NULL) { 
 		//while (ssd->dmpg_list != NULL && tt_flush_mpgs < LINE_SIZE) { 
 		while (ssd->dmpg_list != NULL) { 
+		//for (int i = 0; i < 64; i++) { 
 			while (should_gc_high(ssd)) { 
 				/* perform GC here until !should_gc(ssd) */
 				r = do_gc(ssd, true); 
@@ -1087,14 +1089,17 @@ static uint64_t set_maptbl_pg_dirty(struct ssd *ssd, uint64_t lba)
 			tt_flush_mpgs++;
 		}
 		ssd->tt_maptbl_dpg = 0; 
+		//ssd->tt_maptbl_dpg -= 64;
 		ssd->tt_maptbl_flush++; 
 		ssd->tt_maptbl_flush_pgs += tt_flush_mpgs; 
 //		//ftl_log("maptbl_flush_pgs: %d\n", ssd->tt_maptbl_flush_pgs);
 		//ftl_log("spp->pgs_protected: %d  tt_maptbl_flush: %d\n", spp->pgs_protected, ssd->tt_maptbl_flush); 
+		//return maxlat; 
 	}
 //sleep:
 	/* sleep for the duration of (tt_flush_mpgs / LINE_SIZE * maxlat) */
 
+	//return 0;
 	return accumulat;
 }
 #endif
@@ -1375,8 +1380,10 @@ static uint32_t ssd_buff_flush(struct ssd *ssd)
 	struct dpg_node* dpg;
 
 	qemu_mutex_lock(&bp->dpg_to_flush_list->lock);
+	//ftl_log("catched lock\n");
 	/* flush data pages of which maptbl pages are in zcl */
 	while (znp!= NULL) { 
+		//ftl_log("znp checkpoint\n");
 		idx = znp->mpg_idx;  // idx for request table
 		struct dpg_tbl_ent* ep = &bp->dpg_tbl[idx];
 
@@ -1416,8 +1423,10 @@ static uint32_t ssd_buff_flush(struct ssd *ssd)
 			goto sleep;
 #endif
 	}
-
+	
+	//ftl_log("checkpoint 0\n");
 	if (bp->mpg_value_heap->hsz >= 1) { 
+		//ftl_log("hsz checkpoint\n");
 		struct hnode* max_node = pop_max_heap(ssd); 
 
 		assert(max_node);
@@ -1451,6 +1460,7 @@ static uint32_t ssd_buff_flush(struct ssd *ssd)
 	ssd->tt_user_dat_flush_pgs += tt_flush_dpgs; 
 	
 	qemu_mutex_unlock(&bp->dpg_to_flush_list->lock);
+	//ftl_log("put the lock\n");
 	//ftl_log("user data write cnt: %d  mycnt: %d\n", ssd->tt_user_dat_flush_pgs, mycnt); 
 //sleep:
 	/* sleep for the duration of (tt_flush_dpgs / LINE_SIZE * maxlat) */
@@ -1544,6 +1554,7 @@ static uint64_t ssd_buff_write(struct ssd *ssd, NvmeRequest *req)
 #ifdef USE_BUFF_DEBUG_L1
 	////	ftl_log("bp->tt_reqs: %u .. \n", bp->tt_reqs);
 #endif	
+#if 0
 		//ftl_log("debug1\n");	
 //		if (bp->tt_reqs > BUFF_SIZE) { 
 		if (bp->status->tt_reqs > 64 && bp->dpg_flush_list->reqs <= 64) { 
@@ -1552,6 +1563,13 @@ static uint64_t ssd_buff_write(struct ssd *ssd, NvmeRequest *req)
 			ftl_log("debug bp->status->tt_reqs:%d\n", bp->status->tt_reqs);
 			maxlat = ssd_buff_flush(ssd); 
 		} 
+#endif		
+	//	while (bp->status->tt_reqs > 64 && bp->dpg_flush_list->reqs <= 64) { 
+		while (bp->status->tt_reqs > 64) {
+			maxlat = ssd_buff_flush(ssd); 
+			if (bp->status->tt_reqs < BUFF_SIZE) 
+				break; 
+		}
 	} 
 	return maxlat/64; 
 } 
@@ -1621,14 +1639,14 @@ static void *ftl_thread(void *arg)
 
 #ifdef DAWID
 #ifdef ASYNCH
-static void move_dpg_list(struct dpg_list *src, struct dpg_list *dest)
+static int32_t move_dpg_list(struct dpg_list *src, struct dpg_list *dest)
 { 
 	qemu_mutex_lock(&src->lock); 
 	//ftl_log("before src->reqs: %ld, dest->reqs: %ld\n", src->reqs, dest->reqs);
 
 	if (!src->reqs) { 
 		qemu_mutex_unlock(&src->lock); 
-		return; 
+		return -1; 
 	} 
 	qemu_mutex_lock(&dest->lock); 
 	
@@ -1660,7 +1678,7 @@ static void move_dpg_list(struct dpg_list *src, struct dpg_list *dest)
 	qemu_mutex_unlock(&dest->lock); 
 	qemu_mutex_unlock(&src->lock);
 	
-	return;  
+	return 0;  
 } 
 
 static void *ftl_flush_thread(void *arg)
@@ -1671,7 +1689,7 @@ static void *ftl_flush_thread(void *arg)
 
 	struct dpg_node* dpg;
 	uint64_t curlat = 0, maxlat = 0;
-	uint64_t accumulat = 0;
+	uint64_t accumulat = 0;//, maptblat = 0;
 	uint64_t now, stime; 
 	//uint64_t stime = qemu_clock_get_ns(QEMU_CLOCK_REALTIME); 
 	//uint64_t tt_flush_dpgs; 
@@ -1680,13 +1698,21 @@ static void *ftl_flush_thread(void *arg)
 //		ftl_log("check0\n");
 		/* move dpg_to_flush_list to dpg_flush_list */
 		// Condition variable? or busy waiting? 
-		stime = qemu_clock_get_ns(QEMU_CLOCK_REALTIME); 
+//		stime = qemu_clock_get_ns(QEMU_CLOCK_REALTIME); 
 		if (bp->dpg_to_flush_list->reqs > 64 && bp->dpg_flush_list->reqs <= 64) { 
 			//ftl_log("check0\n");
-			move_dpg_list(bp->dpg_to_flush_list, bp->dpg_flush_list); 
-		} 
+			//ftl_log("before tt_reqs: %d, to_flush_list: %ld, flush_list: %ld\n", bp->status->tt_reqs, bp->dpg_to_flush_list->reqs, bp->dpg_flush_list->reqs);
+			int32_t ret = move_dpg_list(bp->dpg_to_flush_list, bp->dpg_flush_list);
+			//ftl_log("after tt_reqs: %d, to_flush_list: %ld, flush_list: %ld\n", bp->status->tt_reqs, bp->dpg_to_flush_list->reqs, bp->dpg_flush_list->reqs);
+			if (ret == -1) 
+				ftl_log("move_dpg_list err!\n"); 
+		}
+	//	} else { 
+			//ftl_log("prob check0\n"); 
+	//	}
 		
-//		ftl_log("flush_list->reqs: %ld\n", bp->dpg_flush_list->reqs);
+		//ftl_log("check0\n");
+		//ftl_log("flush_list->reqs: %ld\n", bp->dpg_flush_list->reqs);
 		if (bp->dpg_flush_list->reqs > 64) { // Channel Cnt
 			/* Flush dpg_flush_list to Chip */ 
 			//ftl_log("check1\n");
@@ -1701,21 +1727,30 @@ static void *ftl_flush_thread(void *arg)
 				/* update maptbl for the flushed data */ 
 				set_maptbl_pg_dirty(ssd, dpg->lpn); 
 				accumulat += maxlat; 
+				//if (accumulat < maptblat) 
+					//accumulat = maptblat; 
 
 				/* remove request from the request table */
 				bp->dpg_flush_list->head = bp->dpg_flush_list->head->next; 
 				free(dpg); 
 			}
-			
+			//ftl_log("maxlat: %ld\n", maxlat);	
+					
 			//ftl_log("check2\n");	
 			/* sleep during max latency */
+			//ftl_log("check2\n");
+			stime = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
 			while (1) { 
 				now = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
-//				ftl_log("now: %ld, stime: %ld, maxlat: %ld\n", now, stime, maxlat);
+			//	ftl_log("now: %ld, stime: %ld, maxlat: %ld\n", now, stime, maxlat);
 				if(now > stime + maxlat)
+			//	if (now > stime + maxlat + accumulat)
 					break; 		
 			} 
+			ftl_log("maxlat: %ld  calc: %ld\n", maxlat, now);	
+			//ftl_log("now: %ld, stime: %ld, maxlat: %ld\n", now, stime, maxlat);
 			
+			//ftl_log("check3\n");	
 			/* decrease the number of requests in buffer */
 			//ftl_log("check3\n");
 			qemu_mutex_lock(&bp->status->lock);
