@@ -664,15 +664,25 @@ static uint64_t ssd_advance_status(struct ssd *ssd, struct ppa *ppa, struct
     case NAND_WRITE:
         /* write: transfer data through channel first */
 		//ftl_log("lun_avail_time: %ld  nand_stime: %ld  pg_wr_lat: %d\n", lun->next_lun_avail_time, nand_stime, spp->pg_wr_lat); 
+#if 0
         nand_stime = (lun->next_lun_avail_time < cmd_stime) ? cmd_stime : \
-                     lun->next_lun_avail_time;
-        if (ncmd->type == USER_IO) {
+                     lun->next_lun_avail_time; 
+#endif
+	//ftl_log("next: %ld  cmd_stime: %ld\n", lun->next_lun_avail_time, cmd_stime);
+	nand_stime = cmd_stime;
+	//ftl_log("next: %ld  cmd_stime: %ld\n", lun->next_lun_avail_time, cmd_stime);
+#if 0 	
+	if (lun->next_lun_avail_time >= cmd_stime) 
+		ftl_log("next: %ld  cmd_stime: %ld\n", lun->next_lun_avail_time, cmd_stime);
+#endif
+	if (ncmd->type == USER_IO) {
             lun->next_lun_avail_time = nand_stime + spp->pg_wr_lat;
         } else {
             lun->next_lun_avail_time = nand_stime + spp->pg_wr_lat;
         }
+	//ftl_log("next: %ld  cmd_stime: %ld\n", lun->next_lun_avail_time, cmd_stime);
         lat = lun->next_lun_avail_time - cmd_stime;
-	ftl_log("next: %ld\n", lun->next_lun_avail_time);
+	//ftl_log("next: %ld  cmd_stime: %ld\n", lun->next_lun_avail_time, cmd_stime);
 
 #if 0
         chnl_stime = (ch->next_ch_avail_time < cmd_stime) ? cmd_stime : \
@@ -901,7 +911,7 @@ static int do_gc(struct ssd *ssd, bool force)
     struct ppa ppa;
     int ch, lun;
 	
-	//ftl_log("do_gc\n");
+    ftl_log("do_gc\n");
     victim_line = select_victim_line(ssd, force);
     if (!victim_line) {
         return -1;
@@ -997,14 +1007,14 @@ static void add_to_dirty_mpg_list(struct ssd *ssd, uint64_t fidx)
  * if the number of dirty maptbl pages exceeds the protected number. */
 static uint64_t set_maptbl_pg_dirty(struct ssd *ssd, uint64_t lba)
 {
-	struct ssdparams *spp = &ssd->sp; 
+	//struct ssdparams *spp = &ssd->sp; 
 	uint64_t idx = get_mpg_idx(lba);
 
-	uint64_t curlat = 0, maxlat = 0; 
+	//uint64_t curlat = 0, maxlat = 0; 
 	uint64_t accumulat = 0; 
-	int r; 
+	//int r; 
 
-	int tt_flush_mpgs = 0;
+	//int tt_flush_mpgs = 0;
 	
 	//ftl_log("dirty page: %d\n", ssd->tt_maptbl_dpg); 
 
@@ -1029,6 +1039,7 @@ static uint64_t set_maptbl_pg_dirty(struct ssd *ssd, uint64_t lba)
 	ftl_log("tt_maptbl_dpgs = %d protected = %d\n", ssd->tt_maptbl_dpg, spp->pgs_protected);
 #endif
 
+#if 0
 	/* check the need of mapping table flush */
 	if (ssd->tt_maptbl_dpg >= spp->pgs_protected) {
 #ifdef USE_BUFF_DEBUG_L1
@@ -1096,6 +1107,7 @@ static uint64_t set_maptbl_pg_dirty(struct ssd *ssd, uint64_t lba)
 		//ftl_log("spp->pgs_protected: %d  tt_maptbl_flush: %d\n", spp->pgs_protected, ssd->tt_maptbl_flush); 
 		//return maxlat; 
 	}
+#endif
 //sleep:
 	/* sleep for the duration of (tt_flush_mpgs / LINE_SIZE * maxlat) */
 
@@ -1322,7 +1334,7 @@ static void add_to_heap(struct ssd *ssd, uint64_t mpg_idx)
 #endif
 
 #ifdef USE_BUFF
-static int32_t ssd_buff_flush_one_page(struct ssd *ssd, struct dpg_node* dpg)
+static uint64_t ssd_buff_flush_one_page(struct ssd *ssd, struct dpg_node* dpg)
 {
 
 	uint64_t lpn;
@@ -1376,7 +1388,7 @@ static uint32_t ssd_buff_flush(struct ssd *ssd)
 	//uint64_t accumulat = 0; 
 	uint64_t idx = 0;
 
-	int tt_flush_dpgs = 0;
+	//int tt_flush_dpgs = 0;
 	struct dpg_node* dpg;
 
 	qemu_mutex_lock(&bp->dpg_to_flush_list->lock);
@@ -1457,7 +1469,7 @@ static uint32_t ssd_buff_flush(struct ssd *ssd)
 		//ftl_log("flush dpgs: %d\n", tt_flush_dpgs);
 	}
 	mycnt++; 
-	ssd->tt_user_dat_flush_pgs += tt_flush_dpgs; 
+	//ssd->tt_user_dat_flush_pgs += tt_flush_dpgs; 
 	
 	qemu_mutex_unlock(&bp->dpg_to_flush_list->lock);
 	//ftl_log("put the lock\n");
@@ -1538,6 +1550,7 @@ static uint64_t ssd_buff_write(struct ssd *ssd, NvmeRequest *req)
 		ftl_log("tt_reqs = %d\n", bp->tt_reqs);
 #endif
 
+		//ftl_log("tt_reqs = %d\n", bp->status->tt_reqs);
 		/* update mapping table entry to point to buffer address */ 
 		ppa = get_maptbl_ent(ssd, lpn); 
 
@@ -1681,76 +1694,172 @@ static int32_t move_dpg_list(struct dpg_list *src, struct dpg_list *dest)
 	return 0;  
 } 
 
+static void calc_delay_maptbl_flush(struct ssd *ssd)
+{
+	//struct ssdparams *spp = &ssd->sp; 
+	uint64_t curlat = 0, maxlat = 0; 
+	uint64_t accumulat = 0; 
+	int r; 
+
+	uint64_t idx; 
+	int tt_flush_mpgs = 0;
+	uint64_t now, stime; 
+	/* do flush mapping table */ 
+	/* 이것도 한번에 하나가 아니라 LINE_SIZE 만큼 내쫓아야 함 */
+	/* 지금은 아예 전체를 내쫓는 듯 */ 
+	//while (ssd->dmpg_list != NULL) { 
+	//while (ssd->dmpg_list != NULL && tt_flush_mpgs < LINE_SIZE) { 
+	//while (ssd->dmpg_list != NULL) {
+	//ftl_log("checkpoint0\n"); 
+	for (int i = 0; i < 64; i++) { 
+		while (should_gc_high(ssd)) { 
+			/* perform GC here until !should_gc(ssd) */
+			r = do_gc(ssd, true); 
+			if (r == -1)
+				break; 
+		} 
+		
+		/* sanghyeon fixed */ 
+		idx = ssd->dmpg_list->idx; 
+		ssd->maptbl_state[idx] &= ~(1 << DIRTY_BIT_SHIFT);
+
+		struct ppa ppa = get_gtd_ent(ssd, idx); // lpn >> idx ??  
+
+		/* update old page information first */
+		if (mapped_ppa(&ppa)) { 
+			mark_page_invalid(ssd, &ppa); 
+			set_rmap_ent(ssd, INVALID_LPN, &ppa); 
+		} 
+		
+		/* new wirte */ 
+		ppa = get_new_page(ssd); 
+		/* update gtd */ 
+		set_gtd_ent(ssd, idx, &ppa); 
+		/* update rmap */
+		set_rmap_ent(ssd, idx, &ppa); // maybe we changed rmap struct.. 
+
+		mark_page_valid(ssd, &ppa); 
+
+		/* need to advance the write pointer here */
+		ssd_advance_write_pointer(ssd); 
+
+		struct nand_cmd swr; 
+		swr.type = USER_IO;
+		swr.cmd = NAND_WRITE; 
+		swr.stime = 0; 
+		/* get latency statistics */
+		curlat = ssd_advance_status(ssd, &ppa, &swr); 
+		maxlat = (curlat > maxlat) ? curlat : maxlat; 
+		// how can I treat this latency .. 
+		accumulat += maxlat; 
+
+		struct dmpg_node* tmp = ssd->dmpg_list; 
+		ssd->dmpg_list = ssd->dmpg_list->next; 
+		free(tmp);
+
+		tt_flush_mpgs++;
+	}
+	
+	//ftl_log("checkpoint1\n");
+	stime = qemu_clock_get_ns(QEMU_CLOCK_REALTIME); 
+	while (1) { 
+		now = qemu_clock_get_ns(QEMU_CLOCK_REALTIME); 
+		if (now > stime + maxlat)
+			break; 
+	}	
+	//ftl_log("mapdat maxlat: %ld  calc: %ld\n", maxlat, now);	
+
+	//ssd->tt_maptbl_dpg = 0; 
+	ssd->tt_maptbl_dpg -= 64;
+	ssd->tt_maptbl_flush++; 
+	ssd->tt_maptbl_flush_pgs += tt_flush_mpgs; 
+	//ftl_log("maptbl_flush_pgs: %d\n", ssd->tt_maptbl_flush_pgs);
+	//ftl_log("spp->pgs_protected: %d  tt_maptbl_flush: %d\n", spp->pgs_protected, ssd->tt_maptbl_flush); 
+	//return maxlat;
+	return;  
+} 
+
 static void *ftl_flush_thread(void *arg)
 { 
 	FemuCtrl *n = (FemuCtrl *)arg; 
 	struct ssd *ssd = n->ssd; 
 	struct ssd_buff *bp = &ssd->buff;
+	struct ssdparams *spp = &ssd->sp; 
 
 	struct dpg_node* dpg;
-	uint64_t curlat = 0, maxlat = 0;
-	uint64_t accumulat = 0;//, maptblat = 0;
+	uint64_t curlat = 0;//, maxlat = 0;
+	//uint64_t accumulat = 0;//, maptblat = 0;
 	uint64_t now, stime; 
 	//uint64_t stime = qemu_clock_get_ns(QEMU_CLOCK_REALTIME); 
 	//uint64_t tt_flush_dpgs; 
 
 	while (1) {
-//		ftl_log("check0\n");
+		//ftl_log("check0\n");
 		/* move dpg_to_flush_list to dpg_flush_list */
 		// Condition variable? or busy waiting? 
 //		stime = qemu_clock_get_ns(QEMU_CLOCK_REALTIME); 
 		if (bp->dpg_to_flush_list->reqs > 64 && bp->dpg_flush_list->reqs <= 64) { 
-			//ftl_log("check0\n");
+			ftl_log("check0\n");
 			//ftl_log("before tt_reqs: %d, to_flush_list: %ld, flush_list: %ld\n", bp->status->tt_reqs, bp->dpg_to_flush_list->reqs, bp->dpg_flush_list->reqs);
 			int32_t ret = move_dpg_list(bp->dpg_to_flush_list, bp->dpg_flush_list);
 			//ftl_log("after tt_reqs: %d, to_flush_list: %ld, flush_list: %ld\n", bp->status->tt_reqs, bp->dpg_to_flush_list->reqs, bp->dpg_flush_list->reqs);
 			if (ret == -1) 
 				ftl_log("move_dpg_list err!\n"); 
+			ftl_log("check1\n");
 		}
 	//	} else { 
 			//ftl_log("prob check0\n"); 
 	//	}
 		
-		//ftl_log("check0\n");
+		//ftl_log("check1\n");
 		//ftl_log("flush_list->reqs: %ld\n", bp->dpg_flush_list->reqs);
 		if (bp->dpg_flush_list->reqs > 64) { // Channel Cnt
 			/* Flush dpg_flush_list to Chip */ 
 			//ftl_log("check1\n");
+			uint64_t maxlat = 0;
 			for (int i = 0; i < 64; i++) { 
 				dpg = bp->dpg_flush_list->head; 
 				
 				/* write one page into flash */ 
 				curlat = ssd_buff_flush_one_page(ssd, dpg); 
+				//ftl_log("curlat: %ld, maxlat: %ld\n", curlat, maxlat);
 				maxlat = (curlat > maxlat) ? curlat : maxlat; 
-				accumulat += maxlat; 
+				//accumulat += maxlat; 
 
 				/* update maptbl for the flushed data */ 
 				set_maptbl_pg_dirty(ssd, dpg->lpn); 
-				accumulat += maxlat; 
+				//accumulat += maxlat; 
 				//if (accumulat < maptblat) 
 					//accumulat = maptblat; 
 
 				/* remove request from the request table */
 				bp->dpg_flush_list->head = bp->dpg_flush_list->head->next; 
-				free(dpg); 
+				free(dpg);
+				ssd->tt_user_dat_flush_pgs++;  
 			}
 			//ftl_log("maxlat: %ld\n", maxlat);	
 					
+			ftl_log("userdat pgs: %d, mapdat pgs: %d\n", ssd->tt_user_dat_flush_pgs, ssd->tt_maptbl_flush_pgs);   
 			//ftl_log("check2\n");	
 			/* sleep during max latency */
-			//ftl_log("check2\n");
+			ftl_log("check2\n");
 			stime = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
 			while (1) { 
 				now = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
-			//	ftl_log("now: %ld, stime: %ld, maxlat: %ld\n", now, stime, maxlat);
+				//ftl_log("now: %ld, stime: %ld, maxlat: %ld\n", now, stime, maxlat);
 				if(now > stime + maxlat)
 			//	if (now > stime + maxlat + accumulat)
 					break; 		
 			} 
-			ftl_log("maxlat: %ld  calc: %ld\n", maxlat, now);	
+			//ftl_log("userdat maxlat: %ld  calc: %ld\n", maxlat, now);	
 			//ftl_log("now: %ld, stime: %ld, maxlat: %ld\n", now, stime, maxlat);
 			
-			//ftl_log("check3\n");	
+			ftl_log("check3\n");
+			while (ssd->tt_maptbl_dpg >= spp->pgs_protected) { 
+				calc_delay_maptbl_flush(ssd);			
+			} 
+
+			ftl_log("check4\n");	
 			/* decrease the number of requests in buffer */
 			//ftl_log("check3\n");
 			qemu_mutex_lock(&bp->status->lock);
@@ -1759,7 +1868,8 @@ static void *ftl_flush_thread(void *arg)
 			bp->dpg_flush_list->reqs -= 64; 
 			//tt_flush_dpgs += 64;
 			//ftl_log("check4\n");
-		}  
+		}
+		//ftl_log("userdat pgs: %d, mapdat pgs: %d\n", ssd->tt_user_dat_flush_pgs, ssd->tt_maptbl_flush_pgs);   
 	}
 
 	return NULL; 
