@@ -61,13 +61,16 @@ enum {
 #define USE_BUFF
 #define USE_BUFF_FIFO
 #define EUNJI
+//#define FEMU_DEBUG_FTL 
+
+#define USE_BUFF_DEBUG
 //#define USE_BUFF_DAWID
 //#define USE_BUFF_DEBUG_L1
-//#define PARTIAL_PROTECTED
+#define PARTIAL_PROTECTED
 
 /* things that buffer needed */ 
 #define BUFF_SIZE 1048576
-#define PROTECTED_RATIO 0.1
+#define PROTECTED_RATIO 0.01
 
 //unsigned char dirty_option = 0x1; 
 #define DIRTY_BIT_SHIFT 0

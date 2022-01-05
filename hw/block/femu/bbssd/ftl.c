@@ -49,14 +49,12 @@ static inline void set_maptbl_ent_with_buff(struct ssd *ssd, uint64_t lpn, struc
 }
 #endif
 
-#if 0
 #ifdef USE_BUFF
 static uint64_t get_mpg_idx(uint64_t lba)
 { 
 	/* find index on map table page associated with lpn */ 
 	return lba >> _PMES; 
 } 
-#endif
 #endif
 
 static uint64_t ppa2pgidx(struct ssd *ssd, struct ppa *ppa)
@@ -184,6 +182,10 @@ static struct line *get_next_free_line(struct ssd *ssd)
 
     QTAILQ_REMOVE(&lm->free_line_list, curline, entry);
     lm->free_line_cnt--;
+#ifdef USE_BUFF_DEBUG
+	ftl_log("get_next_free_line: free_line_cnt = %d\n", lm->free_line_cnt);
+#endif
+
     return curline;
 }
 
@@ -855,6 +857,10 @@ static void mark_line_free(struct ssd *ssd, struct ppa *ppa)
     /* move this line to free line list */
     QTAILQ_INSERT_TAIL(&lm->free_line_list, line, entry);
     lm->free_line_cnt++;
+#ifdef USE_BUFF_DEBUG	
+    ftl_log("mark_line_free: free_line_cnt = %d\n", lm->free_line_cnt);
+#endif
+
 }
 
 static int do_gc(struct ssd *ssd, bool force)
@@ -865,7 +871,6 @@ static int do_gc(struct ssd *ssd, bool force)
     struct ppa ppa;
     int ch, lun;
 	
-	//ftl_log("do_gc\n");
     victim_line = select_victim_line(ssd, force);
     if (!victim_line) {
         return -1;
@@ -875,6 +880,11 @@ static int do_gc(struct ssd *ssd, bool force)
     ftl_debug("GC-ing line:%d,ipc=%d,victim=%d,full=%d,free=%d\n", ppa.g.blk,
               victim_line->ipc, ssd->lm.victim_line_cnt, ssd->lm.full_line_cnt,
               ssd->lm.free_line_cnt);
+#ifdef USE_BUFF_DEBUG	
+    ftl_log("GC-ing line:%d,ipc=%d,victim=%d,full=%d,free=%d\n", ppa.g.blk,
+              victim_line->ipc, ssd->lm.victim_line_cnt, ssd->lm.full_line_cnt,
+              ssd->lm.free_line_cnt);
+#endif
 
     /* copy back valid data */
     for (ch = 0; ch < spp->nchs; ch++) {
@@ -944,7 +954,8 @@ static uint64_t ssd_read(struct ssd *ssd, NvmeRequest *req)
 
 //#if 1 //PFTL
 //#if 1 //PROTECTED
-#ifdef USE_BUFF_DAWID
+#ifdef USE_BUFF
+#ifdef PARTIAL_PROTECTED
 static void add_to_dirty_mpg_list(struct ssd *ssd, uint64_t fidx)
 { 
 	struct dmpg_node *nn = g_malloc0(sizeof(struct dmpg_node)); 
@@ -956,30 +967,24 @@ static void add_to_dirty_mpg_list(struct ssd *ssd, uint64_t fidx)
 	return; 
 } 
 #endif
+#endif
 
 #ifdef USE_BUFF
+#ifdef PARTIAL_PROTECTED
 /* This function sets the maptbl page dirty and flushes maptbl 
  * if the number of dirty maptbl pages exceeds the protected number. */
 static uint64_t set_maptbl_pg_dirty(struct ssd *ssd, uint64_t lba)
 {
-#if 0
+	/* Nothing to do if maptbl page is dirty */
 	uint64_t idx = get_mpg_idx(lba);
 
-#ifdef PARTIAL_PROTECTED
-	struct ssdparams *spp = &ssd->sp; 
-	int r; 
-	int tt_flush_mpgs = 0;
-	uint64_t curlat = 0;
-#endif
-	uint64_t maxlat = 0; 
-
-#ifdef PARTIAL_PROTECTED
-	/* Nothing to do if maptbl page is dirty */
 	if (ssd->maptbl_state[idx] & (1 << DIRTY_BIT_SHIFT)) { 
 		return 0; 
 	} 
 
 	/* set the maptbl pg dirty */
+	// 여기에서 lock 필요한지 체크 
+	// clear 는 어디에서 하는지?? 
 	ssd->maptbl_state[idx] |= (1 << DIRTY_BIT_SHIFT); 
 
 	/* add to dirty maptbl page list */ 
@@ -988,72 +993,101 @@ static uint64_t set_maptbl_pg_dirty(struct ssd *ssd, uint64_t lba)
 	/* increment the number of dirty maptbl pages */ 
 	ssd->tt_maptbl_dpg++; 
 
-#ifdef USE_BUFF_EBUG_L1
-	ftl_log("tt_maptbl_dpgs = %d protected = %d\n", ssd->tt_maptbl_dpg, spp->pgs_protected);
-#endif
-
-	/* check the need of mapping table flush */ 
-	if (ssd->tt_maptbl_dpg >= spp->pgs_protected) {
-#ifdef USE_BUFF_DEBUG_L1
-		ftl_log("do flush mapping table ...\n");
-#endif
-		/* do flush mapping table */ 
-		/* 이것도 한번에 하나가 아니라 LINE_SIZE 만큼 내쫓아야 함 */
-		/* 지금은 아예 전체를 내쫓는 듯 */ 
-		//while (ssd->dmpg_list != NULL) { 
-		while (ssd->dmpg_list != NULL && tt_flush_mpgs < LINE_SIZE) { 
-
-			while (should_gc_high(ssd)) { 
-				/* perform GC here until !should_gc(ssd) */
-				r = do_gc(ssd, true); 
-				if (r == -1)
-					break; 
-			} 
-	
-			struct ppa ppa = get_gtd_ent(ssd, idx); // lpn >> idx ??  
-	
-			/* update old page information first */
-			if (mapped_ppa(&ppa)) { 
-				mark_page_invalid(ssd, &ppa); 
-				set_rmap_ent(ssd, INVALID_LPN, &ppa); 
-			} 
-			
-			/* new wirte */ 
-			ppa = get_new_page(ssd); 
-			/* update gtd */ 
-			set_gtd_ent(ssd, idx, &ppa); 
-			/* update rmap */
-			set_rmap_ent(ssd, idx, &ppa); // maybe we changed rmap struct.. 
-	
-			mark_page_valid(ssd, &ppa); 
-	
-			/* need to advance the write pointer here */
-			ssd_advance_write_pointer(ssd); 
-
-			struct nand_cmd swr; 
-			swr.type = USER_IO;
-			swr.cmd = NAND_WRITE; 
-			swr.stime = 0; 
-			/* get latency statistics */
-			curlat = ssd_advance_status(ssd, &ppa, &swr); 
-			maxlat = (curlat > maxlat) ? curlat : maxlat; 
-			// how can I treat this latency .. 
-
-			struct dmpg_node* tmp = ssd->dmpg_list; 
-			ssd->dmpg_list = ssd->dmpg_list->next; 
-			free(tmp);
-	
-			tt_flush_mpgs++;
-		}
-		ssd->tt_maptbl_dpg = 0; 
-		ssd->tt_maptbl_flush++; 
-		ssd->tt_maptbl_flush_pgs += tt_flush_mpgs; 
-	}
-	return maxlat;
-#endif
-#endif
 	return 0;
 }
+#endif
+#endif
+
+#ifdef USE_BUFF
+#ifdef PARTIAL_PROTECTED
+static void calc_delay_maptbl_flush(struct ssd *ssd) 
+{ 
+	struct ssdparams *spp = &ssd->sp; 
+	uint64_t curlat = 0;
+	uint64_t maxlat = 0; 
+	uint64_t idx = 0;
+	uint64_t stime, now;
+	uint64_t tt_flush_mpgs = 0;
+
+#ifdef USE_BUFF_DEBUG
+		ftl_log("do maptbl flush .. \n");
+#endif
+
+	/* do flush mapping table */ 
+	for(int i = 0; i < spp->nluns; i++) {  
+		assert(ssd->dmpg_list != NULL);
+#if 0
+		while (should_gc_high(ssd)) { 
+			/* perform GC here until !should_gc(ssd) */
+			r = do_gc(ssd, true); 
+			if (r == -1)
+				break; 
+		} 
+#endif
+		idx = ssd->dmpg_list->idx;
+		
+		/* clear dirty bit */ 
+		ssd->maptbl_state[idx] &= ~(1 << DIRTY_BIT_SHIFT);
+		ssd->tt_maptbl_dpg--;
+
+		struct ppa ppa = get_gtd_ent(ssd, idx);
+
+		/* update old page information first */
+		if (mapped_ppa(&ppa)) { 
+			mark_page_invalid(ssd, &ppa); 
+			set_rmap_ent(ssd, INVALID_LPN, &ppa); 
+		} 
+			
+		/* new write */ 
+		ppa = get_new_page(ssd); 
+		/* update gtd */ 
+		set_gtd_ent(ssd, idx, &ppa); 
+		/* update rmap */
+		set_rmap_ent(ssd, idx, &ppa); // maybe we changed rmap struct.. 
+	
+	
+		mark_page_valid(ssd, &ppa); 
+	
+		/* need to advance the write pointer here */
+		ssd_advance_write_pointer(ssd); 
+
+		struct nand_cmd swr; 
+		swr.type = USER_IO;
+		swr.cmd = NAND_WRITE; 
+		swr.stime = 0; 
+		/* get latency statistics */
+		curlat = ssd_advance_status(ssd, &ppa, &swr); 
+		maxlat = (curlat > maxlat) ? curlat : maxlat; 
+
+		/* advance dirty mpg pointer */ 
+		struct dmpg_node* tmp = ssd->dmpg_list; 
+		ssd->dmpg_list = ssd->dmpg_list->next; 
+		free(tmp);
+		
+		tt_flush_mpgs++;
+	
+	}
+
+	/* waiting until flush is finished */
+	stime = qemu_clock_get_ns(QEMU_CLOCK_REALTIME); 
+	while(1) {
+		now = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
+		if (now > stime + maxlat)
+			break;
+	}
+
+	ssd->tt_maptbl_flush++; 
+	ssd->tt_maptbl_flush_pgs += tt_flush_mpgs; 
+
+#ifdef USE_BUFF_DEBUG
+	ftl_log("do maptbl flush .. %d completed\n",ssd->tt_maptbl_flush_pgs);
+#endif
+
+
+
+	return; 
+}
+#endif
 #endif
 
 #ifdef USE_BUFF_DAWID
@@ -1238,6 +1272,7 @@ static void delete_max_heap(void)
 #ifdef USE_BUFF_DAWID
 static int32_t is_maptbl_pg_dirty(struct ssd *ssd, uint64_t idx) 
 { 
+	// 여기에서 lock 필요 
 	assert(ssd->maptbl_state != NULL);
 	assert(idx < ssd->sp.pgs_maptbl);
 
@@ -1320,6 +1355,7 @@ static int32_t ssd_buff_flush_one_page(struct ssd *ssd, struct dpg_node* dpg, ui
 	lpn = dpg->lpn; 
 
 	while (should_gc_high(ssd)) { 
+		ftl_log("ssd_buff_flush_one_page: do_gc\n");
 		r = do_gc(ssd, true); 
 		if (r == -1) 
 			break; 
@@ -1552,11 +1588,13 @@ static uint64_t ssd_buff_write_dawid(struct ssd *ssd, NvmeRequest *req)
 #ifdef USE_BUFF_FIFO
 static uint64_t ssd_buff_flush_fifo(struct ssd *ssd)
 {
-#ifdef USE_BUFF_DEBUG
+#ifdef USE_BUFF_DEBUG_L1
 	ftl_log("ssd_buff_flush_fifo ..\n"); 
-	//struct ssdparams *spp = &ssd->sp;
 #endif
+#ifdef PARTIAL_PROTECTED
 	struct ssd_buff *bp = &ssd->buff;
+#endif
+	struct ssdparams *spp = &ssd->sp;
 	uint64_t curlat = 0, maxlat = 0; 
 
 	uint64_t tt_flush_dpgs = 0;
@@ -1573,8 +1611,10 @@ static uint64_t ssd_buff_flush_fifo(struct ssd *ssd)
 		curlat = ssd_buff_flush_one_page(ssd, dpg, stime);
 		maxlat = (curlat > maxlat) ? curlat : maxlat; 
 
+#ifdef PARTIAL_PROTECTED
 		/* update maptbl for the flushed data */
 		set_maptbl_pg_dirty(ssd, dpg->lpn); 
+#endif
 
 		/* remove request from the request table */
 //		prev_dpg = dpg;
@@ -1592,6 +1632,14 @@ static uint64_t ssd_buff_flush_fifo(struct ssd *ssd)
 		if(now > stime + maxlat)
 			break;
 	}
+
+#ifdef PARTIAL_PROTECTED
+	/* check the need of mapping table flush */ 
+	while(ssd->tt_maptbl_dpg >= spp->pgs_protected) {
+		calc_delay_maptbl_flush(ssd);
+
+	}
+#endif
 
 	return tt_flush_dpgs;
 }
@@ -1684,6 +1732,8 @@ static void move_dpg_list(struct dpg_list* src, struct dpg_list* dest)
 	}
 	qemu_mutex_lock(&dest->lock);
 
+#if 0
+
 	assert(dest!=NULL);
 	assert(src!=NULL);
 
@@ -1710,6 +1760,7 @@ static void move_dpg_list(struct dpg_list* src, struct dpg_list* dest)
 	}
 //	ftl_log(" total reqs = %ld, dest->reqs %ld\n", reqs, dest->reqs);
 	assert(dest->reqs == reqs);
+#endif
 	
 	// Append a src list into the tail of dest list. 	
 	if(dest->tail) {
@@ -1758,7 +1809,7 @@ static void splice_dpg_list(struct dpg_list* src, struct dpg_list* dest)
 #ifdef USE_BUFF_FIFO
 static uint64_t ssd_buff_write_fifo(struct ssd *ssd, NvmeRequest *req)
 { 
-#ifdef USE_BUFF_DEBUG
+#ifdef USE_BUFF_DEBUG_L1
 	ftl_log("ssd_buff_write_fifo .. \n");
 #endif
 	/* FEMU maintains data in dram space. When buffer is used, we only update
@@ -1784,13 +1835,13 @@ static uint64_t ssd_buff_write_fifo(struct ssd *ssd, NvmeRequest *req)
 		/* wait until an empty slot is ready in buffer */
 		qemu_mutex_lock(&bp->qlock);
 		while(!(bp->tt_reqs < BUFF_SIZE)){
-#ifdef USE_BUFF_DEBUG
+#ifdef USE_BUFF_DEBUG_L1
 			ftl_log("ftl_thread: sleep on empty_slot_cond\n");
 #endif
 			qemu_cond_wait(&bp->empty_slot_cond, &bp->qlock);
 		}
 
-#ifdef USE_BUFF_DEBUG
+#ifdef USE_BUFF_DEBUG_L1
 		ftl_log("ftl_thread: wakes up on empty_slot_cond\n");
 #endif
 		qemu_mutex_unlock(&bp->qlock);
@@ -1857,7 +1908,7 @@ static uint64_t ssd_buff_write_fifo(struct ssd *ssd, NvmeRequest *req)
 			if(!bp->flush_in_progress) {
 				bp->need_flush = 1;
 				move_dpg_list(bp->dpg_running_list, bp->dpg_to_flush_list);
-#ifdef USE_BUFF_DEBUG
+#ifdef USE_BUFF_DEBUG_L1
 				ftl_log("Signal to need flush\n");
 #endif
 				qemu_cond_signal(&bp->need_flush_cond);
@@ -1894,6 +1945,7 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
 
     while (should_gc_high(ssd)) {
         /* perform GC here until !should_gc(ssd) */
+		ftl_log("ssd_write: do_gc\n");
         r = do_gc(ssd, true);
         if (r == -1)
             break;
@@ -2002,6 +2054,7 @@ static void *ftl_thread(void *arg)
 
       		/* clean one line if needed (in the background) */
             if (should_gc(ssd)) {
+				ftl_log("ftl_thread: do_gc\n");
                 do_gc(ssd, false);
             }
         }
@@ -2024,12 +2077,12 @@ static void *ftl_flush_thread(void *arg)
         //usleep(10000000);
 		qemu_mutex_lock(&bp->qlock);
 		while(!bp->need_flush){
-#ifdef USE_BUFF_DEBUG
+#ifdef USE_BUFF_DEBUG_L1
 			ftl_log("ftl_flush_thread: sleep on need_flush_cond\n");
 #endif
 			qemu_cond_wait(&bp->need_flush_cond, &bp->qlock);
 		}
-#ifdef USE_BUFF_DEBUG
+#ifdef USE_BUFF_DEBUG_L1
 		ftl_log("ftl_flush_thread: wakes up on need_flush_cond\n");
 #endif
 		bp->need_flush = 0;
@@ -2039,7 +2092,7 @@ static void *ftl_flush_thread(void *arg)
 		/**************************/
 		/*		start flushing    */
 		/**************************/
-#ifdef USE_BUFF_DEBUG
+#ifdef USE_BUFF_DEBUG_L1
 		ftl_log("ftl_flush_thread starts flushing. \n");
 #endif
 		move_dpg_list(bp->dpg_to_flush_list, bp->dpg_flush_list);
@@ -2049,7 +2102,7 @@ static void *ftl_flush_thread(void *arg)
 		tt_flush_dpgs = ssd_buff_flush_fifo(ssd);
 #endif
 		/* finished flush */
-#ifdef USE_BUFF_DEBUG
+#ifdef USE_BUFF_DEBUG_L1
 		ftl_log("ftl_flush_thread finished flushing\n");
 #endif
 		move_dpg_list(bp->dpg_flush_list, bp->dpg_finished_list);
@@ -2057,7 +2110,7 @@ static void *ftl_flush_thread(void *arg)
 		qemu_mutex_lock(&bp->qlock);
 		bp->flush_in_progress = 0;
 
-#ifdef USE_BUFF_DEBUG
+#ifdef USE_BUFF_DEBUG_L1
 		ftl_log("flush_thread: signal empty_slot_cond\n");
 #endif
 		bp->tt_reqs -= tt_flush_dpgs;
