@@ -58,25 +58,25 @@ enum {
 #define CH_BITS     (7)
 
 
+//#define ORG_VER
 #define USE_BUFF
-//#define USE_BUFF_FIFO
-#define EUNJI
-//#define FEMU_DEBUG_FTL 
+#define DAWID 
+#define ASYNCH
+//#define FIFO
+//#define USE_BUFF_DEBUG
+//#define DAWID_BUFF
 
-#define USE_BUFF_DEBUG
-#define USE_BUFF_DAWID
-//#define USE_BUFF_DEBUG_L1
-#define PARTIAL_PROTECTED
-
+#ifdef USE_BUFF
 /* things that buffer needed */ 
-#define BUFF_SIZE 1048576
+//#define BUFF_SIZE 1048576
+#define BUFF_SIZE 16384
+#define LINE_SIZE 1 // ssd maximum parallelism 
+//#define PROTECTED_RATIO 0.01
 #define PROTECTED_RATIO 0.01
 
 //unsigned char dirty_option = 0x1; 
 #define DIRTY_BIT_SHIFT 0
 #define EXIST_IN_ZCL_BIT_SHIFT 1 // ZCL: Zero Cost List
-
-#ifdef USE_BUFF
 
 struct zcl_node { 
 	uint64_t mpg_idx; // request table maptbl pg no. 
@@ -88,19 +88,14 @@ struct hnode {
 	uint64_t dpg_cnt; // number of data pages associated with the mabtbl pg 
 }; 
 
-struct zcl_max_heap {
-	struct zcl_node* zcl; // zero cost list 
+struct max_heap {
 	struct hnode* heap;
 	uint64_t hsz;
-	uint64_t reqs;
 };
 
 struct dpg_node { // data page 
-//	NvmeRequest *req;
+	NvmeRequest *req;
 	uint64_t lpn; 
-//	uint64_t mpg_idx; // zero-cost list, max heap 
-//	uint64_t dpg_cnt; // max heap 
-
 	int64_t stime; 
 	struct dpg_node *prev; 
 	struct dpg_node *next;
@@ -112,45 +107,35 @@ struct dpg_tbl_ent{
 	uint64_t heap_idx; 	
 };
 
-enum {
-	DPG_LIST_RUNNING = 1, 
-	DPG_LIST_TO_FLUSH = 2, 
-	DPG_LIST_FLUSH_IN_PROGRESS = 3, 
-	DPG_LIST_FLUSH_FINISHED = 4
-};
+struct dpg_list { 
+	QemuMutex lock; 
+	uint64_t reqs; 
+	struct dpg_node *head; 
+	struct dpg_node *tail; 
+}; 
 
-struct dpg_list {
-	QemuMutex lock;
-	uint64_t reqs;
-	struct dpg_node* head; 
-	struct dpg_node* tail;
-};
+struct status { 
+	QemuMutex lock; 
+	uint32_t tt_reqs; 
+}; 
 
-struct ssd_buff { 
-	uint64_t tt_reqs;
-
-	struct dpg_list* dpg_running_list; 	
-	struct dpg_list* dpg_to_flush_list;
-	struct dpg_list* dpg_flush_list; 
-	struct dpg_list* dpg_finished_list; 
-	struct dpg_list* dpg_zombie_list; 
-
-	/* Lock to synchronize threads to access the free buffer slot */
-	QemuMutex qlock;
-	int need_flush;
-	int flush_in_progress;
-	int need_maptbl_update;
-
-	QemuCond need_flush_cond;
-	QemuCond empty_slot_cond;
-
-#ifdef USE_BUFF_FIFO
-	struct dpg_node** dpg_list_head; // insert into head 
-	struct dpg_node** dpg_list_tail; // insert into tail 
-#endif
-#ifdef USE_BUFF_DAWID
+struct ssd_buff {
+#ifdef DAWID
+	//QemuMutex bp_lock;
+	//uint32_t tt_reqs;
+	struct status* status;
 	struct dpg_tbl_ent* dpg_tbl;
-	struct zcl_max_heap* zcl_max_heap; // cost-effectiveness of maptable page  
+	struct max_heap* mpg_value_heap; // cost-effectiveness of maptable page  
+	struct zcl_node* zcl; // zero cost list 
+//	struct dpg_node *future_flush_list_head;
+//	struct dpg_node *future_flush_list_tail;
+//	uint32_t future_flush_list_cnt;
+	struct dpg_list *dpg_to_flush_list; 
+	struct dpg_list *dpg_flush_list; 
+#else
+	uint32_t tt_reqs; 
+	struct dpg_node *head; 
+	struct dpg_node *tail; 
 #endif
 };
 #endif
@@ -235,9 +220,6 @@ struct ssdparams {
     int pls_per_lun;  /* # of planes per LUN (Die) */
     int luns_per_ch;  /* # of LUNs per channel */
     int nchs;         /* # of channels in the SSD */
-#ifdef USE_BUFF
-	int nluns;		  /* # of total LUNS in the SSD */
-#endif
 
     int pg_rd_lat;    /* NAND page read latency in nanoseconds */
     int pg_wr_lat;    /* NAND page program latency in nanoseconds */
@@ -337,6 +319,7 @@ struct ssd {
 	int tt_maptbl_dpg; 
 	int tt_maptbl_flush; // number of flushes 
 	int tt_maptbl_flush_pgs; // number of flushed pages 
+	int tt_user_dat_flush_pgs; 
 	int *maptbl_state; //checked mapping table's dirty condition
 	struct dmpg_node *dmpg_list;
 	struct ppa *gtd; /* page level meta mapping table */ 
@@ -350,9 +333,7 @@ struct ssd {
     struct rte_ring **to_poller;
     bool *dataplane_started_ptr;
     QemuThread ftl_thread;
-#ifdef USE_BUFF
-    QemuThread ftl_flush_thread;
-#endif
+    QemuThread ftl_flush_thread; 
 };
 
 #if 0 //NAM

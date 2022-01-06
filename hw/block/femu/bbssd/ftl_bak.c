@@ -1347,7 +1347,6 @@ static int32_t ssd_buff_flush_one_page(struct ssd *ssd, struct dpg_node* dpg, ui
 }
 #endif
 
-#if 0
 #ifdef USE_BUFF_DAWID
 static int32_t ssd_buff_flush_dawid(struct ssd *ssd)
 {
@@ -1457,7 +1456,6 @@ sleep:
 	/* sleep for the duration of (tt_flush_dpgs / LINE_SIZE * maxlat) */
 	return 0;
 }
-#endif
 
 #ifdef USE_BUFF_DAWID
 static uint64_t ssd_buff_write_dawid(struct ssd *ssd, NvmeRequest *req)
