@@ -63,7 +63,7 @@ enum {
 #define EUNJI
 //#define FEMU_DEBUG_FTL 
 
-#define USE_BUFF_DEBUG
+//#define USE_BUFF_DEBUG
 #define USE_BUFF_DAWID
 //#define USE_BUFF_DEBUG_L1
 #define PARTIAL_PROTECTED
@@ -85,14 +85,15 @@ struct zcl_node {
 
 struct hnode { 
 	uint64_t mpg_idx;	// mapping table page idx  
-	uint64_t dpg_cnt; // number of data pages associated with the mabtbl pg 
+//	uint64_t dpg_cnt; // number of data pages associated with the mabtbl pg 
 }; 
 
 struct zcl_max_heap {
 	struct zcl_node* zcl; // zero cost list 
 	struct hnode* heap;
-	uint64_t hsz;
-	uint64_t reqs;
+	int hsz; // heap size
+	int zsz; // zero-cost list size 
+	int tt_reqs;
 };
 
 struct dpg_node { // data page 
@@ -108,6 +109,7 @@ struct dpg_node { // data page
 
 struct dpg_tbl_ent{ 
 	struct dpg_node *head; 
+	uint64_t dpg_cnt; // number of data pages associated with the mabtbl pg 
 	uint64_t mpg_idx; 		// mapping table page idx 
 	uint64_t heap_idx; 	
 };
