@@ -18,8 +18,13 @@ enum {
     NAND_ERASE = 2,
 
     NAND_READ_LATENCY = 40000,
-    NAND_PROG_LATENCY = 200000,
-    NAND_ERASE_LATENCY = 2000000,
+//    NAND_PROG_LATENCY = 200000, 
+	NAND_PROG_LATENCY = 400000,
+    //NAND_ERASE_LATENCY = 2000000,
+
+//    NAND_READ_LATENCY = 0,
+//    NAND_PROG_LATENCY = 0,
+    NAND_ERASE_LATENCY = 0,
 };
 
 enum {
@@ -57,7 +62,7 @@ enum {
 #define LUN_BITS    (8)
 #define CH_BITS     (7)
 
-
+//#define FEMU_DEBUG_FTL
 //#define ORG_VER
 #define USE_BUFF
 #define DAWID 
@@ -69,10 +74,11 @@ enum {
 #ifdef USE_BUFF
 /* things that buffer needed */ 
 //#define BUFF_SIZE 1048576
-#define BUFF_SIZE 16384
+//#define BUFF_SIZE 65536
+#define BUFF_SIZE 1024
 #define LINE_SIZE 1 // ssd maximum parallelism 
-//#define PROTECTED_RATIO 0.01
 #define PROTECTED_RATIO 0.01
+//#define PROTECTED_RATIO 1
 
 //unsigned char dirty_option = 0x1; 
 #define DIRTY_BIT_SHIFT 0
@@ -80,6 +86,7 @@ enum {
 
 struct zcl_node { 
 	uint64_t mpg_idx; // request table maptbl pg no. 
+	uint64_t dpg_cnt;
 	struct zcl_node *next;
 }; 
 
@@ -105,6 +112,7 @@ struct dpg_tbl_ent{
 	struct dpg_node *head; 
 	uint64_t mpg_idx; 		// mapping table page idx 
 	uint64_t heap_idx; 	
+	struct zcl_node *znp;
 };
 
 struct dpg_list { 
@@ -117,16 +125,23 @@ struct dpg_list {
 struct status { 
 	QemuMutex lock; 
 	uint32_t tt_reqs; 
+};
+
+struct cond_chip { 
+	QemuMutex lock; 
+	uint32_t idle;
 }; 
 
 struct ssd_buff {
 #ifdef DAWID
 	//QemuMutex bp_lock;
 	//uint32_t tt_reqs;
+	struct cond_chip* cond_chip;
 	struct status* status;
 	struct dpg_tbl_ent* dpg_tbl;
 	struct max_heap* mpg_value_heap; // cost-effectiveness of maptable page  
 	struct zcl_node* zcl; // zero cost list 
+	uint64_t bp_reqs; 
 //	struct dpg_node *future_flush_list_head;
 //	struct dpg_node *future_flush_list_tail;
 //	uint32_t future_flush_list_cnt;
