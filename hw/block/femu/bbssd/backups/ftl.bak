@@ -1645,7 +1645,7 @@ static uint64_t ssd_buff_write(struct ssd *ssd, NvmeRequest *req)
 		//ftl_log("bp->status->tt_reqs: %d\n", bp->status->tt_reqs);
 		//ftl_log("idx: %ld\n", idx);
 		//ftl_log("before  checkpoint  %d  %d  %ld  %ld   %d %d   %ld\n", bp->status->tt_reqs, bp_cnt, bp->dpg_to_flush_list->reqs, bp->dpg_flush_list->reqs, zl_cnt, hp_cnt, idx); 
-		while (bp->status->tt_reqs > 524288 && bp->mpg_value_heap->hsz >= 1 ) {
+		while (bp->status->tt_reqs > 64 && bp->mpg_value_heap->hsz >= 1 ) {
 			//ftl_log("checkpoint  %ld\n", bp->dpg_to_flush_list->reqs);	
 			//ftl_log("before  checkpoint  %d  %d  %ld  %ld   %d %d\n", bp->status->tt_reqs, bp_cnt, bp->dpg_to_flush_list->reqs, bp->dpg_flush_list->reqs, zl_cnt, hp_cnt); 
 			maxlat = ssd_buff_flush(ssd); 

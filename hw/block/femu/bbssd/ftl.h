@@ -19,12 +19,12 @@ enum {
 
     NAND_READ_LATENCY = 40000,
 //    NAND_PROG_LATENCY = 200000, 
-	NAND_PROG_LATENCY = 400000,
-    //NAND_ERASE_LATENCY = 2000000,
+	NAND_PROG_LATENCY = 1000000,
+    NAND_ERASE_LATENCY = 2000000,
 
 //    NAND_READ_LATENCY = 0,
 //    NAND_PROG_LATENCY = 0,
-    NAND_ERASE_LATENCY = 0,
+    //NAND_ERASE_LATENCY = 0,
 };
 
 enum {
@@ -74,8 +74,8 @@ enum {
 #ifdef USE_BUFF
 /* things that buffer needed */ 
 //#define BUFF_SIZE 1048576
-//#define BUFF_SIZE 65536
-#define BUFF_SIZE 1024
+#define BUFF_SIZE 65536
+//#define BUFF_SIZE 1024
 #define LINE_SIZE 1 // ssd maximum parallelism 
 #define PROTECTED_RATIO 0.01
 //#define PROTECTED_RATIO 1
@@ -335,9 +335,12 @@ struct ssd {
 	int tt_maptbl_flush; // number of flushes 
 	int tt_maptbl_flush_pgs; // number of flushed pages 
 	int tt_user_dat_flush_pgs; 
+	int gc_maptbl_flush_pgs; 
+	int gc_user_dat_flush_pgs;
 	int *maptbl_state; //checked mapping table's dirty condition
 	struct dmpg_node *dmpg_list;
 	struct ppa *gtd; /* page level meta mapping table */ 
+	uint64_t *g_rmap; /* reverse gtd, assume it's stored in OOB */
 #endif
 	uint64_t *rmap;     /* reverse mapptbl, assume it's stored in OOB */
     struct write_pointer wp;
