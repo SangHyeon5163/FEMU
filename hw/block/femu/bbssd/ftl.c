@@ -4,9 +4,7 @@ int zl_cnt = 0;
 int bp_cnt = 0;
 
 static void *ftl_thread(void *arg);
-#ifdef ASYNCH
 static void *ftl_flush_thread(void *arg);
-#endif
 
 static inline bool should_gc(struct ssd *ssd)
 {
@@ -504,13 +502,13 @@ static void ssd_init_buff(struct ssd *ssd)
 //#elif defined DAWID_BUFF
 #endif
 
-#ifdef DAWID
 static void ssd_init_buff(struct ssd *ssd)
 {
 	ftl_log("ssd_init_buff ... \n");
 	struct ssdparams *spp = &ssd->sp; 
 	struct ssd_buff *bp = &ssd->buff; 
 
+#ifdef DAWID
 	/* initialize request group table */
 	bp->dpg_tbl = g_malloc0(sizeof(struct dpg_tbl_ent) * spp->pgs_maptbl);
 	for (uint64_t i = 0; i < spp->pgs_maptbl; i++) { 
@@ -519,6 +517,7 @@ static void ssd_init_buff(struct ssd *ssd)
 		bp->dpg_tbl[i].heap_idx = 0;
 		bp->dpg_tbl[i].znp = NULL; 
 	}
+#endif
 
 	/* initialize buff status */
 	bp->cond_chip = (struct cond_chip*)malloc(sizeof(struct cond_chip));
@@ -529,7 +528,9 @@ static void ssd_init_buff(struct ssd *ssd)
 	bp->status->tt_reqs = 0;
 	bp->bp_reqs = 0;
 //	qemu_mutex_unlock(&bp->status->lock); 
+#ifdef DAWID
 	bp->zcl = NULL;
+#endif
 
 	/* initialize dpg_to_flush_list */ 
 	bp->dpg_to_flush_list = (struct dpg_list*)malloc(sizeof(struct dpg_list));
@@ -559,17 +560,17 @@ static void ssd_init_buff(struct ssd *ssd)
 	ssd->gc_maptbl_flush_pgs = 0; 
 	ssd->gc_user_dat_flush_pgs = 0; 
 
+#ifdef DAWID
 	/* initialize max heap */
 	bp->mpg_value_heap = g_malloc0(sizeof(struct max_heap));
 	bp->mpg_value_heap->heap = g_malloc0(sizeof(struct hnode) * spp->pgs_maptbl);
 	bp->mpg_value_heap->hsz = 0;
+#endif 
 
 	return; 
 } 
-//#endif
-#endif
 
-#ifdef FIFO
+#if 0
 static void ssd_init_buff(struct ssd *ssd) 
 { 
 	struct ssdparams *spp = &ssd->sp; 
@@ -805,12 +806,14 @@ static void mark_page_invalid(struct ssd *ssd, struct ppa *ppa)
     bool was_full_line = false;
     struct line *line;
 
+	//ftl_log("1\n");
     /* update corresponding page status */
     pg = get_pg(ssd, ppa);
     //ftl_log("mark_page_invalid: %d\n", pg->status); 
     ftl_assert(pg->status == PG_VALID);
     pg->status = PG_INVALID;
 
+	//ftl_log("2\n");
     /* update corresponding block status */
     blk = get_blk(ssd, ppa);
     ftl_assert(blk->ipc >= 0 && blk->ipc < spp->pgs_per_blk);
@@ -818,6 +821,7 @@ static void mark_page_invalid(struct ssd *ssd, struct ppa *ppa)
     ftl_assert(blk->vpc > 0 && blk->vpc <= spp->pgs_per_blk);
     blk->vpc--;
 
+	//ftl_log("3\n");
     /* update corresponding line status */
     line = get_line(ssd, ppa);
     ftl_assert(line->ipc >= 0 && line->ipc < spp->pgs_per_line);
@@ -1540,7 +1544,6 @@ static uint64_t ssd_buff_flush_one_page(struct ssd *ssd, struct dpg_node* dpg)
 #endif
 
 #ifdef DAWID
-#if 1
 static uint32_t ssd_buff_flush(struct ssd *ssd)
 {
 #ifdef USE_BUFF_DEBUG_L1
@@ -1659,115 +1662,7 @@ ret:
 	qemu_mutex_unlock(&bp->dpg_to_flush_list->lock);
 	return 0;
 }
-#endif
-#if 0
-static uint32_t ssd_buff_flush(struct ssd *ssd)
-{ 
-	struct ssd_buff *bp = &ssd->buff;
-	struct zcl_node *znp = bp->zcl; 
-	struct dpg_node *dpg; 
-	uint64_t idx = 0; 
-	uint64_t zcl_dpg_cnt = 0; 
-	uint64_t hp_dpg_cnt = 0;
-	uint64_t check_cnt;  
-	
-	qemu_mutex_lock(&bp->dpg_to_flush_list->lock); 
-	/* flush data pages of which maptbl pages */
-	if (bp->mpg_value_heap->hsz >= 1) { 
-		struct hnode *max_node = pop_max_heap(ssd); 
-		assert(max_node); 
-	
-		idx = max_node->mpg_idx; 
-		hp_dpg_cnt = max_node->dpg_cnt; 
-		check_cnt = 0; 
 
-		struct dpg_tbl_ent *ep = &bp->dpg_tbl[idx]; 
-
-		/* send request from dram buffer to nand flash */
-		for (int i = 0; i < hp_dpg_cnt; i++) { 
-			//if (ep->head == NULL) 
-			//	break; 
-			dpg = ep->head; 
-
-			if (!ep->head->next) { 
-				ep->head = NULL;
-			} else { 
-				ep->head = ep->head->next; 
-			}
-
-			dpg->next = NULL; 
-			
-			if (!bp->dpg_to_flush_list->head && !bp->dpg_to_flush_list->tail) { 
-				bp->dpg_to_flush_list->head = dpg; 
-				bp->dpg_to_flush_list->tail = dpg;
-			} else { 
-				bp->dpg_to_flush_list->tail->next = dpg; 
-				bp->dpg_to_flush_list->tail = bp->dpg_to_flush_list->tail->next; 
-			} 
-
-			bp->dpg_to_flush_list->reqs++; 
-			bp->bp_reqs--; 
-			check_cnt++;
-			bp_cnt--;
-			hp_cnt--;  	
-		}
-		
-		if (hp_dpg_cnt != check_cnt) 
-			ftl_log("flush data pages err in heap..\n"); 
-	}
-
-	while (znp != NULL) { 
-		idx = znp->mpg_idx;
-		zcl_dpg_cnt = znp->dpg_cnt;
-		check_cnt = 0; 
- 
-		struct dpg_tbl_ent *ep = &bp->dpg_tbl[idx]; 
-		
-		/* send request from dram buffer to nand flash */ 
-		for (int i = 0; i < zcl_dpg_cnt; i++) { 
-			dpg = ep->head; 
-
-			if (!ep->head->next) { 
-				ep->head = NULL; 
-			} else { 
-				ep->head = ep->head->next; 
-			} 
-
-			dpg->next = NULL; 
-
-			if (!bp->dpg_to_flush_list->head && !bp->dpg_to_flush_list->tail) { 
-				bp->dpg_to_flush_list->head = dpg; 
-				bp->dpg_to_flush_list->tail = dpg;
-			}  else { 
-				bp->dpg_to_flush_list->tail->next = dpg; 
-				bp->dpg_to_flush_list->tail = bp->dpg_to_flush_list->tail->next; 
-			} 
-
-			bp->dpg_to_flush_list->reqs++; 
-			bp->bp_reqs--; 
-			check_cnt++;
-			bp_cnt--; 
-			zl_cnt--;
-		}
-
-		if (zcl_dpg_cnt != check_cnt)
-			ftl_log("flush data pages err in zcl..\n");
-		
-		/* remove znode from zcl */ 
-		bp->zcl = bp->zcl->next; 
-
-		ssd->maptbl_state[znp->mpg_idx] &= ~(1 << EXIST_IN_ZCL_BIT_SHIFT); //off
-		free(znp); 
-
-		znp = bp->zcl;  
-	}  
-	
-	qemu_mutex_unlock(&bp->dpg_to_flush_list->lock);
-}
-#endif 
-#endif
-	
-#ifdef DAWID
 static uint64_t ssd_buff_write(struct ssd *ssd, NvmeRequest *req)
 { 
 #ifdef USE_BUFF_DEBUG_L1
@@ -1851,7 +1746,7 @@ static uint64_t ssd_buff_write(struct ssd *ssd, NvmeRequest *req)
 	//	while (bp->status->tt_reqs > 64 && bp->dpg_flush_list->reqs <= 64) { 
 		//ftl_log("bp: %d, hsz: %ld, cond_chip: %d\n", bp->status->tt_reqs, bp->mpg_value_heap->hsz, bp->cond_chip->idle);
 		//while (bp->status->tt_reqs > 65536 && bp->mpg_value_heap->hsz >= 1 && bp->cond_chip->idle == 1) {
-		while (bp->status->tt_reqs > 16384 && bp->cond_chip->idle == 1) {
+		while (bp->status->tt_reqs > 64 && bp->cond_chip->idle == 1) {
 			maxlat = ssd_buff_flush(ssd); 
 			//ftl_log("010011010\n");
 			if (bp->status->tt_reqs < BUFF_SIZE) 
@@ -1859,6 +1754,135 @@ static uint64_t ssd_buff_write(struct ssd *ssd, NvmeRequest *req)
 		}
 	} 
 	return maxlat/64; 
+} 
+#endif
+
+#ifdef FIFO
+static uint64_t ssd_buff_flush(struct ssd *ssd) 
+{
+#ifdef FG_DEBUG
+	ftl_log("ssd_buff_flush_with_fifo...\n"); 
+#endif
+	struct ssd_buff *bp = &ssd->buff; 
+	//int64_t curlat = 0, maxlat = 0; 
+	//uint64_t accumulat = 0;
+
+	//struct dpg_node *dpg; 
+	
+	/* flush data pages of which maptbl pages are in zcl */ 
+	qemu_mutex_lock(&bp->dpg_to_flush_list->lock); 
+	
+	if (bp->dpg_to_flush_list->tail) { 
+		bp->dpg_to_flush_list->tail->next = bp->head; 
+	} 	
+
+	if (bp->head) { 
+		bp->head->prev = bp->dpg_to_flush_list->tail; 
+	} 
+
+	bp->dpg_to_flush_list->tail = bp->tail;
+
+	if (bp->dpg_to_flush_list->head == NULL) 
+		bp->dpg_to_flush_list->head = bp->head; 
+
+	bp->dpg_to_flush_list->reqs += bp->bp_reqs; 
+
+	bp->head = NULL; 
+	bp->tail = NULL; 
+	bp->bp_reqs = 0; 
+
+	qemu_mutex_unlock(&bp->dpg_to_flush_list->lock); 
+	
+	return 0; 
+} 
+
+static uint64_t ssd_buff_write(struct ssd *ssd, NvmeRequest *req)
+{ 
+	struct ssdparams *spp = &ssd->sp; 
+	struct ssd_buff *bp = &ssd->buff; 
+
+	uint64_t lba = req->slba; 
+	int len = req->slba; 
+	uint64_t start_lpn = lba / spp->secs_per_pg; 
+	uint64_t end_lpn = (lba + len - 1) / spp->secs_per_pg; 
+	struct ppa ppa; 
+	uint64_t lpn; 
+
+	uint64_t maxlat = 0;
+
+	for (lpn = start_lpn; lpn <= end_lpn; lpn++) { 
+#ifdef FG_DEBUG
+		ftl_log("1\n");
+#endif
+		struct dpg_node *nn = g_malloc0(sizeof(struct dpg_node)); 	
+		if (!nn) { 
+			ftl_log("nn ERR\n");
+		} 
+	
+#ifdef FG_DEBUG
+		ftl_log("2\n");	
+#endif
+		/* fill the request information */
+		nn->lpn = lpn; 
+		nn->stime = req->stime; 
+		nn->prev = NULL; 
+		nn->next = NULL; 
+
+#ifdef FG_DEBUG
+		ftl_log("3\n");
+#endif
+		/* insert a new request into the request linked list */ 
+		if (!bp->head && !bp->tail) { 
+			//ftl_log("1111\n");
+			bp->head = nn; 
+			bp->tail = nn;
+		} else {
+			//ftl_log("2222\n"); 
+			nn->next = bp->head; 
+			bp->head->prev = nn; 
+			bp->head = nn; 
+		} 
+
+#ifdef FG_DEBUG
+		ftl_log("4\n");
+#endif
+		/* increase number of requests in buffer */ 
+		qemu_mutex_lock(&bp->status->lock); 
+		bp->status->tt_reqs++; 		
+		qemu_mutex_unlock(&bp->status->lock);
+		bp->bp_reqs++;
+	
+#ifdef FG_DEBUG
+		ftl_log("5\n");
+#endif
+		/* update mapping table entry to point to buffer address */ 
+		ppa = get_maptbl_ent(ssd, lpn); 
+
+		if (mapped_ppa(&ppa)) { 
+			/* update old page information first */ 
+			mark_page_invalid(ssd, &ppa); 
+			set_rmap_ent(ssd, INVALID_LPN, &ppa); 
+		} 
+
+		/* update maptbl entry with buffer address */
+		set_maptbl_ent_with_buff(ssd, lpn, nn);	
+
+#ifdef FG_DEBUG
+		ftl_log("6\n");
+		/* flush data buffer */ 
+		ftl_log("tt_reqs: %d, cond_chip: %d\n", bp->status->tt_reqs, bp->cond_chip->idle);
+#endif
+		while (bp->status->tt_reqs > 64 && bp->cond_chip->idle == 1) { 
+			//ftl_log("start\n");
+			maxlat = ssd_buff_flush(ssd);
+			//ftl_log("done\n"); 
+			if (bp->status->tt_reqs < BUFF_SIZE) 
+				break; 
+		} 
+	}
+
+	return maxlat;  
+	
 } 
 #endif
 
@@ -1918,8 +1942,7 @@ static void *ftl_thread(void *arg)
     return NULL;
 }
 
-#ifdef DAWID
-#ifdef ASYNCH
+#ifdef USE_BUFF
 static int32_t move_dpg_list(struct dpg_list *src, struct dpg_list *dest)
 { 
 	qemu_mutex_lock(&src->lock); 
@@ -1995,14 +2018,17 @@ static void calc_delay_maptbl_flush(struct ssd *ssd)
 
 		struct ppa ppa = get_gtd_ent(ssd, idx); // lpn >> idx ??  
 
+		ftl_log("1 idx: %ld ppa: %ld\n", idx, ppa.ppa);
 		/* update old page information first */
 		if (mapped_ppa(&ppa)) { 
-			//ftl_log("calc delay\n");
+			ftl_log("11\n");
 			mark_page_invalid(ssd, &ppa); 
+			ftl_log("12\n");
 			//set_rmap_ent(ssd, INVALID_LPN, &ppa);
 			set_g_rmap_ent(ssd, INVALID_LPN, &ppa);
 		} 
-		
+	
+		ftl_log("2\n");	
 		/* new wirte */ 
 		ppa = get_new_page(ssd); 
 		/* update gtd */ 
@@ -2013,6 +2039,7 @@ static void calc_delay_maptbl_flush(struct ssd *ssd)
 
 		mark_page_valid(ssd, &ppa); 
 
+		ftl_log("3\n");
 		/* need to advance the write pointer here */
 		ssd_advance_write_pointer(ssd); 
 
@@ -2033,7 +2060,7 @@ static void calc_delay_maptbl_flush(struct ssd *ssd)
 		tt_flush_mpgs++;
 	}
 	
-	//ftl_log("checkpoint1\n");
+	//ftl_log("4\n");
 	stime = qemu_clock_get_ns(QEMU_CLOCK_REALTIME); 
 	while (1) { 
 		now = qemu_clock_get_ns(QEMU_CLOCK_REALTIME); 
@@ -2067,7 +2094,7 @@ static void *ftl_flush_thread(void *arg)
 	//uint64_t tt_flush_dpgs; 
 
 	while (1) {
-		//ftl_log("check0\n");
+		//ftl_log("check\n");
 		/* move dpg_to_flush_list to dpg_flush_list */
 		// Condition variable? or busy waiting? 
 //		stime = qemu_clock_get_ns(QEMU_CLOCK_REALTIME); 
@@ -2092,7 +2119,7 @@ static void *ftl_flush_thread(void *arg)
 		//ftl_log("flush_list->reqs: %ld\n", bp->dpg_flush_list->reqs);
 		if (bp->dpg_flush_list->reqs > 64) { // Channel Cnt
 			/* Flush dpg_flush_list to Chip */ 
-			//ftl_log("check1\n");
+			//ftl_log("check2\n");
 			qemu_mutex_lock(&bp->cond_chip->lock); 
 			bp->cond_chip->idle = 0; 
 			qemu_mutex_unlock(&bp->cond_chip->lock);			
@@ -2121,8 +2148,8 @@ static void *ftl_flush_thread(void *arg)
 			}
 			//ftl_log("maxlat: %ld\n", maxlat);	
 					
-			ftl_log("userdat pgs: %d, mapdat pgs: %d\n", ssd->tt_user_dat_flush_pgs, ssd->tt_maptbl_flush_pgs);   
-			ftl_log("gc userdat pgs: %d, mapdat pgs: %d\n", ssd->gc_user_dat_flush_pgs, ssd->gc_maptbl_flush_pgs);
+			//ftl_log("userdat pgs: %d, mapdat pgs: %d\n", ssd->tt_user_dat_flush_pgs, ssd->tt_maptbl_flush_pgs);   
+			//ftl_log("gc userdat pgs: %d, mapdat pgs: %d\n", ssd->gc_user_dat_flush_pgs, ssd->gc_maptbl_flush_pgs);
 			//ftl_log("check2\n");	
 			/* sleep during max latency */
 			//ftl_log("check2\n");
@@ -2138,7 +2165,7 @@ static void *ftl_flush_thread(void *arg)
 			//ftl_log("userdat maxlat: %ld  calc: %ld\n", maxlat, now);	
 			//ftl_log("now: %ld, stime: %ld, maxlat: %ld\n", now, stime, maxlat);
 			
-			//ftl_log("check1\n");
+			//ftl_log("check3\n");
 			while (ssd->tt_maptbl_dpg >= spp->pgs_protected) { 
 				//ftl_log("check0\n");
 				calc_delay_maptbl_flush(ssd);			
@@ -2147,7 +2174,7 @@ static void *ftl_flush_thread(void *arg)
 
 			//ftl_log("check4\n");	
 			/* decrease the number of requests in buffer */
-			//ftl_log("check3\n");
+			//ftl_log("check4\n");
 			qemu_mutex_lock(&bp->status->lock);
 			bp->status->tt_reqs -= 64;
 			qemu_mutex_unlock(&bp->status->lock); 
@@ -2167,5 +2194,4 @@ static void *ftl_flush_thread(void *arg)
 
 	return NULL; 
 }
-#endif
 #endif

@@ -65,9 +65,9 @@ enum {
 //#define FEMU_DEBUG_FTL
 //#define ORG_VER
 #define USE_BUFF
-#define DAWID 
-#define ASYNCH
-//#define FIFO
+#define FIFO
+//#define DAWID 
+//#define ASYNCH
 //#define USE_BUFF_DEBUG
 //#define DAWID_BUFF
 
@@ -133,22 +133,16 @@ struct cond_chip {
 }; 
 
 struct ssd_buff {
+	struct cond_chip* cond_chip; 
+	struct status *status; 
+	uint64_t bp_reqs; 
+	struct dpg_list *dpg_to_flush_list; 
+	struct dpg_list *dpg_flush_list;
 #ifdef DAWID
-	//QemuMutex bp_lock;
-	//uint32_t tt_reqs;
-	struct cond_chip* cond_chip;
-	struct status* status;
 	struct dpg_tbl_ent* dpg_tbl;
 	struct max_heap* mpg_value_heap; // cost-effectiveness of maptable page  
 	struct zcl_node* zcl; // zero cost list 
-	uint64_t bp_reqs; 
-//	struct dpg_node *future_flush_list_head;
-//	struct dpg_node *future_flush_list_tail;
-//	uint32_t future_flush_list_cnt;
-	struct dpg_list *dpg_to_flush_list; 
-	struct dpg_list *dpg_flush_list; 
 #else
-	uint32_t tt_reqs; 
 	struct dpg_node *head; 
 	struct dpg_node *tail; 
 #endif
