@@ -18,12 +18,13 @@ enum {
     NAND_ERASE = 2,
 
     NAND_READ_LATENCY = 40000,
-    NAND_PROG_LATENCY = 200000, 
+	NAND_PROG_LATENCY = 500000,
+    //NAND_PROG_LATENCY = 200000, 
 	//NAND_PROG_LATENCY = 1000000,
     NAND_ERASE_LATENCY = 2000000,
 
-//    NAND_READ_LATENCY = 0,
-//    NAND_PROG_LATENCY = 0,
+    //NAND_READ_LATENCY = 0,
+    //NAND_PROG_LATENCY = 0,
     //NAND_ERASE_LATENCY = 0,
 };
 
@@ -66,12 +67,12 @@ enum {
 //#define FEMU_DEBUG_FTL
 //#define ORG_VER
 #define USE_BUFF
-#define FIFO
-//#define DAWID 
+//#define FIFO
+#define DAWID 
 //#define ASYNCH
 //#define USE_BUFF_DEBUG
 //#define DAWID_BUFF
-#define RES
+//#define RES
 
 #ifdef USE_BUFF
 /* things that buffer needed */ 
@@ -79,8 +80,8 @@ enum {
 //#define BUFF_SIZE 65536
 //#define BUFF_SIZE 1024
 #define LINE_SIZE 1 // ssd maximum parallelism 
-#define PROTECTED_RATIO 0.01
-//#define PROTECTED_RATIO 1
+//#define PROTECTED_RATIO 0.01
+#define PROTECTED_RATIO 1
 
 //unsigned char dirty_option = 0x1; 
 #define DIRTY_BIT_SHIFT 0
