@@ -18,10 +18,10 @@ enum {
     NAND_ERASE = 2,
 
     NAND_READ_LATENCY = 40000,
-	NAND_PROG_LATENCY = 500000,
+	NAND_PROG_LATENCY = 80000000,
     //NAND_PROG_LATENCY = 200000, 
-	//NAND_PROG_LATENCY = 1000000,
-    NAND_ERASE_LATENCY = 2000000,
+	NAND_ERASE_LATENCY = 800000000,
+    //NAND_ERASE_LATENCY = 2000000,
 
     //NAND_READ_LATENCY = 0,
     //NAND_PROG_LATENCY = 0,
@@ -63,12 +63,13 @@ enum {
 #define LUN_BITS    (8)
 #define CH_BITS     (7)
 
+//#define CHECK_DPG
 //#define FG_DEBUG
 //#define FEMU_DEBUG_FTL
 //#define ORG_VER
 #define USE_BUFF
-//#define FIFO
-#define DAWID 
+#define FIFO
+//#define DAWID 
 //#define ASYNCH
 //#define USE_BUFF_DEBUG
 //#define DAWID_BUFF
@@ -320,6 +321,11 @@ struct dmpg_node { /* dirty maptbl pg node */
 	struct dmpg_node *next; 
 };
 
+struct toFlush_comp { 
+	int *toFlush_state;
+	QemuMutex lock;
+}; 
+
 struct ssd {
     char *ssdname;
     struct ssdparams sp;
@@ -335,6 +341,7 @@ struct ssd {
 	int gc_maptbl_flush_pgs; 
 	int gc_user_dat_flush_pgs;
 	int *maptbl_state; //checked mapping table's dirty condition
+	struct toFlush_comp *tf; //checked dirty condition to_flush_list and flush_list
 	struct dmpg_node *dmpg_list;
 	struct ppa *gtd; /* page level meta mapping table */ 
 	uint64_t *g_rmap; /* reverse gtd, assume it's stored in OOB */
