@@ -1219,6 +1219,7 @@ static uint64_t set_maptbl_pg_dirty(struct ssd *ssd, uint64_t lba)
 	/* Update toFlush_state for timing error(?) */ 
 	qemu_mutex_lock(&ssd->tf->lock);
 	ssd->tf->toFlush_state[idx]--;
+	//ftl_log("ssd->tf->toFlush_state[%ld]: %d\n", idx, ssd->tf->toFlush_state[idx]);
 	qemu_mutex_unlock(&ssd->tf->lock);
 
 	/*** do program ***/
@@ -1229,13 +1230,16 @@ static uint64_t set_maptbl_pg_dirty(struct ssd *ssd, uint64_t lba)
 	// Clean Condition
 	/* set the maptbl pg dirty */ 
 	ssd->maptbl_state[idx] |= (1 << DIRTY_BIT_SHIFT); 
-
+	//ssd->tt_maptbl_dpg++;
 point: 
 	if (ssd->tf->toFlush_state[idx] == 0) { 
+	//if (ssd->tf->toFlush_state[idx] == 1) { 
 		/* add to dirty maptbl page list */ 
 		add_to_dirty_mpg_list(ssd, idx); 
 		/* increment the number of dirty maptbl pages */ 
 		ssd->tt_maptbl_dpg++; 
+		//ftl_log("check..\n");
+		//ssd->tf->toFlush_state[idx] = 0;
 	}  
 
 	
@@ -1309,7 +1313,15 @@ static void update_max_heap(struct ssd *ssd, uint64_t idx)
 	struct ssd_buff *bp = &ssd->buff;
 	struct hnode* heap = bp->mpg_value_heap->heap;	
 	uint64_t i = bp->dpg_tbl[idx].heap_idx;
-
+	
+	/* just debug */ 
+#if 0	
+	int func_cnt = 0; 
+	for (int j = 1; j <= bp->mpg_value_heap->hsz; j++) { 
+		func_cnt += heap[j].dpg_cnt;	
+	}  
+	ftl_log("1 hsz: %ld, func_cnt: %d\n", bp->mpg_value_heap->hsz, func_cnt);  
+#endif
 	/* update request dpg_cnt for the heap node */
 	heap[i].dpg_cnt++;
 	
@@ -1323,6 +1335,15 @@ static void update_max_heap(struct ssd *ssd, uint64_t idx)
 	} 
 	heap[i] = hn; 
 	bp->dpg_tbl[hn.mpg_idx].heap_idx = i;
+
+	/* just debug */ 
+#if 0 
+	func_cnt = 0; 
+	for (int j = 1; j <= bp->mpg_value_heap->hsz; j++) { 
+		func_cnt += heap[j].dpg_cnt; 
+	} 
+	ftl_log("2 hsz: %ld, func_cnt: %d\n", bp->mpg_value_heap->hsz, func_cnt);
+#endif 
 
 	return; 
 }
@@ -1559,6 +1580,7 @@ static uint32_t ssd_buff_flush(struct ssd *ssd)
 			}
 			bp->dpg_to_flush_list->reqs++;
 			check_cnt++;
+			++debug_cnt; 
 			//trt_rq_cnt++;	
 			bp->bp_reqs--;
 			bp_cnt--;
@@ -1627,6 +1649,7 @@ static uint32_t ssd_buff_flush(struct ssd *ssd)
 			}
 			bp->dpg_to_flush_list->reqs++;
 			check_cnt++;
+			++debug_cnt;
 			//trt_rq_cnt++;
 			bp->bp_reqs--;
 			bp_cnt--;
@@ -1645,6 +1668,7 @@ static uint32_t ssd_buff_flush(struct ssd *ssd)
 
 ret: 	
 	qemu_mutex_unlock(&bp->dpg_to_flush_list->lock);
+	//ftl_log("debug_cnt: %d\n", debug_cnt);
 	//ftl_log("trt_rq_cnt: %d\n", trt_rq_cnt);	
 
 	return 0;
@@ -1672,9 +1696,10 @@ static uint64_t ssd_buff_write(struct ssd *ssd, NvmeRequest *req)
 #ifdef DEBUG_FUNC
 	uint64_t debug_stime = 0, debug_etime = 0;
 #endif
-
+	
 	/* Walk through all pages for the request */
 	for (lpn = start_lpn; lpn <= end_lpn; lpn++) { 
+		//ftl_log("debug_cnt: %d\n", ++debug_cnt);
 		/* calculate the cost of each maptble page
 		 * and maintain pages accordingly. 
 		 * zero cost list: 
@@ -1739,24 +1764,34 @@ static uint64_t ssd_buff_write(struct ssd *ssd, NvmeRequest *req)
 		check_dpg_maptbl_ent(ssd, idx);
 #endif
 		/* flush data buffer */ 
+		while (bp->status->tt_reqs > BUFF_THRESHOLD) { 
+			if (bp->cond_chip->idle == 1) { 
+				maxlat = ssd_buff_flush(ssd); 
+				if (bp->status->tt_reqs < BUFF_SIZE)
+					break; 
+			} 
+		} 
 	//	while (bp->status->tt_reqs > 64 && bp->dpg_flush_list->reqs <= 64) { 
 		//ftl_log("bp: %d, hsz: %ld, cond_chip: %d\n", bp->status->tt_reqs, bp->mpg_value_heap->hsz, bp->cond_chip->idle);
 		//while (bp->status->tt_reqs > 65536 && bp->mpg_value_heap->hsz >= 1 && bp->cond_chip->idle == 1) {
 		//ftl_log("tt_reqs: %d, cond_chip: %d\n", bp->status->tt_reqs, bp->cond_chip->idle);
 		//while (bp->status->tt_reqs > 64 && bp->cond_chip->idle == 1) {
-		while (bp->status->tt_reqs > 524288 && bp->cond_chip->idle == 1) { 
-			debug_cnt++;
+#if 0
+		while (bp->status->tt_reqs > BUFF_THRESHOLD && bp->cond_chip->idle == 1) { 
+			//debug_cnt++;
 			//ftl_log("debug_cnt: %d\n", debug_cnt);
+			ftl_log("ssd_buff_flush...\n");
 			maxlat = ssd_buff_flush(ssd); 
 			//ftl_log("010011010\n");
 			if (bp->status->tt_reqs < BUFF_SIZE) 
 				break; 
 		
-			//ftl_log("r_zl: %d zl: %d, r_hp: %d hp: %d, tmp1: %d, tmp2: %d\n", r_zl_cnt, zl_cnt, r_hp_cnt, hp_cnt, tmp1, tmp2);
+			ftl_log("r_zl: %d zl: %d, r_hp: %d hp: %d, tmp1: %d, tmp2: %d\n", r_zl_cnt, zl_cnt, r_hp_cnt, hp_cnt, tmp1, tmp2);
 		}
 		
 		//ftl_log("r_zl: %d zl: %d, r_hp: %d hp: %d, host_rq_cnt: %d\n", r_zl_cnt, zl_cnt, r_hp_cnt, hp_cnt, ++host_rq_cnt);
 		//ftl_log("r_zl: %d zl: %d, r_hp: %d hp: %d, tmp1: %d, tmp2: %d\n", r_zl_cnt, zl_cnt, r_hp_cnt, hp_cnt, tmp1, tmp2);
+#endif
 #ifdef DEBUG_FUNC
 		debug_etime = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
 		ftl_log("time: %ld\n", debug_etime - debug_stime); 
@@ -1768,7 +1803,8 @@ static uint64_t ssd_buff_write(struct ssd *ssd, NvmeRequest *req)
 
 #ifdef FIFO
 static uint64_t ssd_buff_flush(struct ssd *ssd)
-{ 
+{
+	//ftl_log("ssd_buff_flush...\n"); 
 	struct ssd_buff *bp = &ssd->buff; 
 	struct dpg_node *dpg; 
 
@@ -1779,7 +1815,7 @@ static uint64_t ssd_buff_flush(struct ssd *ssd)
 		return 0;
 	}
 
-	debug_cnt++;	
+	//debug_cnt++;	
 
 #if 0
 //	ftl_log("11\n"); 
@@ -1812,6 +1848,12 @@ static uint64_t ssd_buff_flush(struct ssd *ssd)
 			bp->dpg_to_flush_list->tail->next = dpg; 
 			bp->dpg_to_flush_list->tail = bp->dpg_to_flush_list->tail->next; 
 		}
+	
+	 	/* update toFlush_state for timing error */ 
+		uint64_t idx = get_mpg_idx(dpg->lpn); 
+		qemu_mutex_lock(&ssd->tf->lock);
+		ssd->tf->toFlush_state[idx]++; 
+		qemu_mutex_unlock(&ssd->tf->lock); 
 
 		bp->dpg_to_flush_list->reqs++; 
 		bp->bp_reqs--;
@@ -1852,9 +1894,6 @@ static uint64_t ssd_buff_write(struct ssd *ssd, NvmeRequest *req)
 #endif
 
 	for (lpn = start_lpn; lpn <= end_lpn; lpn++) { 
-#if 0
-		ftl_log("1\n");
-#endif
 #ifdef DEBUG_FUNC
 		debug_stime = qemu_clock_get_ns(QEMU_CLOCK_REALTIME); 
 #endif
@@ -1863,43 +1902,28 @@ static uint64_t ssd_buff_write(struct ssd *ssd, NvmeRequest *req)
 			ftl_log("nn ERR\n");
 		} 
 	
-#ifdef FG_DEBUG
-		ftl_log("2\n");	
-#endif
 		/* fill the request information */
 		nn->lpn = lpn; 
 		nn->stime = req->stime; 
 		nn->prev = NULL; 
 		nn->next = NULL; 
-		//ftl_log("nn->lpn: %ld\n", nn->lpn);
 	
-#ifdef FG_DEBUG
-		ftl_log("3\n");
-#endif
 		/* insert a new request into the request linked list */ 
 		if (!bp->head && !bp->tail) { 
-			//ftl_log("1111\n");
 			bp->head = nn; 
 			bp->tail = nn;
 		} else {
-			//ftl_log("2222\n"); 
 			nn->next = bp->head; 
 			bp->head->prev = nn; 
 			bp->head = nn; 
 		} 
 
-#ifdef FG_DEBUG
-		ftl_log("4\n");
-#endif
 		/* increase number of requests in buffer */ 
 		qemu_mutex_lock(&bp->status->lock); 
 		bp->status->tt_reqs++; 		
 		qemu_mutex_unlock(&bp->status->lock);
 		bp->bp_reqs++;
 	
-#ifdef FG_DEBUG
-		ftl_log("5\n");
-#endif
 		/* update mapping table entry to point to buffer address */ 
 		ppa = get_maptbl_ent(ssd, lpn); 
 
@@ -1912,52 +1936,26 @@ static uint64_t ssd_buff_write(struct ssd *ssd, NvmeRequest *req)
 		/* update maptbl entry with buffer address */
 		set_maptbl_ent_with_buff(ssd, lpn, nn);	
 
-#ifdef FG_DEBUG
-		ftl_log("6\n");
-#endif
 		/* flush data buffer */ 
-		//ftl_log("tt_reqs: %d, cond_chip: %d\n", bp->status->tt_reqs, bp->cond_chip->idle);
 #if 1 
 		//while (bp->status->tt_reqs > 64 && bp->cond_chip->idle == 1) { 
-		while (bp->status->tt_reqs > 524288 && bp->cond_chip->idle == 1) { 
-			//debug_cnt++; 
-			//ftl_log("debug_cnt: %d\n", debug_cnt);
-			//ftl_log("%d\n", bp->status->tt_reqs);
-			maxlat = ssd_buff_flush(ssd);
-			//ftl_log("3\n"); 
-			if (bp->status->tt_reqs < BUFF_SIZE) 
-				break; 
+//		while (bp->status->tt_reqs > BUFF_THRESHOLD && bp->cond_chip->idle == 1) { 
+		while (bp->status->tt_reqs > BUFF_THRESHOLD) { 
+			if (bp->cond_chip->idle == 1) { 
+				//debug_cnt++; 
+				//ftl_log("debug_cnt: %d\n", debug_cnt);
+				//ftl_log("%d\n", bp->status->tt_reqs);
+				maxlat = ssd_buff_flush(ssd);
+				//ftl_log("3\n"); 
+				if (bp->status->tt_reqs < BUFF_SIZE) 
+					break; 
+			}
 		} 
 #ifdef DEBUG_FUNC
 		debug_etime = qemu_clock_get_ns(QEMU_CLOCK_REALTIME); 
 		ftl_log("time: %ld\n", debug_etime - debug_stime);
 #endif
 #endif
-#if 0
-		ftl_log("tt_reqs: %d  idle: %d\n", bp->status->tt_reqs, bp->cond_chip->idle);
-		if (bp->status->tt_reqs > 64 && bp->cond_chip->idle == 1) { 
-			//ftl_log("1\n");
-			while (1) { 
-				//ftl_log("2\n");
-				//usleep(10);
-				maxlat = ssd_buff_flush(ssd); 
-				if (bp->status->tt_reqs < BUFF_SIZE)
-					break; 
-			} 
-		} else if (bp->status->tt_reqs > BUFF_SIZE && bp->cond_chip->idle == 1) { 
-			//ftl_log("2222\n");
-			while (1) { 
-				//ftl_log("3\n");
-				usleep(10000);
-				if (bp->cond_chip->idle == 1) { 
-					maxlat = ssd_buff_flush(ssd); 
-					if (bp->status->tt_reqs < BUFF_SIZE)
-						break; 
-					//usleep(1000000);
-				}
-			} 
-		}
-#endif 
 	}
 
 	return maxlat;  
@@ -2074,11 +2072,11 @@ static void calc_delay_maptbl_flush(struct ssd *ssd)
 
 	for (int i = 0; i < 64; i++) { 
 		/* sanghyeon fixed */ 
-		idx = ssd->dmpg_list->idx; 
+		idx = ssd->dmpg_list->idx;
 		ssd->maptbl_state[idx] &= ~(1 << DIRTY_BIT_SHIFT);
 
 		struct ppa ppa = get_gtd_ent(ssd, idx); // lpn >> idx ??  
-
+		
 		/* update old page information first */
 		if (mapped_ppa(&ppa)) { 
 			mark_page_invalid(ssd, &ppa); 
@@ -2114,12 +2112,13 @@ static void calc_delay_maptbl_flush(struct ssd *ssd)
 		tt_flush_mpgs++;
 	}
 	
-	//ftl_log("4\n");
 	stime = qemu_clock_get_ns(QEMU_CLOCK_REALTIME); 
 	while (1) { 
 		now = qemu_clock_get_ns(QEMU_CLOCK_REALTIME); 
+//		ftl_log("now: %ld, stime: %ld, maxlat: %ld\n",now, stime, maxlat);
 		if (now > stime + maxlat)
 			break; 
+//		ftl_log("111111111\n");
 	}	
 	//ftl_log("mapdat maxlat: %ld  calc: %ld\n", maxlat, now);	
 
@@ -2208,33 +2207,27 @@ static void *ftl_flush_thread(void *arg)
 	while (1) {
 		/* move dpg_to_flush_list to dpg_flush_list */
 		if (bp->dpg_to_flush_list->reqs > 64 && bp->dpg_flush_list->reqs <= 64) { 
-			//ftl_log("checkPoint1\n");
 			int32_t ret = move_dpg_list(bp->dpg_to_flush_list, bp->dpg_flush_list);
 			if (ret == -1) 
 				ftl_log("move_dpg_list err!\n"); 
-			//ftl_log("checkPoint1-1\n");
 		}
 	
 		if (bp->dpg_flush_list->reqs > 64) { // Channel Cnt
-			//ftl_log("checkPoint2\n");
 			/* Flush dpg_flush_list to Chip */ 
 			qemu_mutex_lock(&bp->cond_chip->lock); 
 			bp->cond_chip->idle = 0; 
 			qemu_mutex_unlock(&bp->cond_chip->lock);			
 
-			//ftl_log("checkPoint2-1\n");
 			uint64_t maxlat = 0;
 			for (int i = 0; i < 64; i++) { 
 				dpg = bp->dpg_flush_list->head; 
 			
-				//ftl_log("checkPoint2-1-1\n"); 	
 				/* write one page into flash */ 
 				curlat = ssd_buff_flush_one_page(ssd, dpg); 
 				//ftl_log("curlat: %ld, maxlat: %ld\n", curlat, maxlat);
 				maxlat = (curlat > maxlat) ? curlat : maxlat; 
 				//accumulat += maxlat; 
 				
-				//ftl_log("checkPoint2-1-2\n");
 				/* update maptbl for the flushed data */ 
 				set_maptbl_pg_dirty(ssd, dpg->lpn); 
 				//accumulat += maxlat; 
@@ -2252,7 +2245,6 @@ static void *ftl_flush_thread(void *arg)
 			ftl_log("userdat pgs: %d, mapdat pgs: %d\n", ssd->tt_user_dat_flush_pgs, ssd->tt_maptbl_flush_pgs);   
 			ftl_log("gc userdat pgs: %d, mapdat pgs: %d\n", ssd->gc_user_dat_flush_pgs, ssd->gc_maptbl_flush_pgs);
 #endif
-			//ftl_log("checkPoint2-2\n");
 			/* sleep during max latency */
 			stime = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
 			while (1) { 
@@ -2267,12 +2259,11 @@ static void *ftl_flush_thread(void *arg)
 			//ftl_log("now: %ld, stime: %ld, maxlat: %ld\n", now, stime, maxlat);
 			
 			//ftl_log("check4\n");
-//			ftl_log("checkPoint2-3\n");
+			//ftl_log("ssd->tt_maptbl dpg: %d, spp->pgs_protected: %d\n", ssd->tt_maptbl_dpg, spp->pgs_protected);
 			while (ssd->tt_maptbl_dpg >= spp->pgs_protected) { 
-				//ftl_log("check0\n");
+				//ftl_log("check\n");
 				calc_delay_maptbl_flush(ssd);			
 			}
-			//ftl_log("check1\n"); 
 
 			//ftl_log("check5\n");	
 			/* decrease the number of requests in buffer */
@@ -2287,13 +2278,10 @@ static void *ftl_flush_thread(void *arg)
 			qemu_mutex_lock(&bp->cond_chip->lock);
 			bp->cond_chip->idle = 1; 
 			qemu_mutex_unlock(&bp->cond_chip->lock);
-//			ftl_log("checkPoint2-4\n");
 		}
 		//ftl_log("userdat pgs: %d, mapdat pgs: %d\n", ssd->tt_user_dat_flush_pgs, ssd->tt_maptbl_flush_pgs);   
 		if (should_gc(ssd)) { 
-			//ftl_log("checkPoint3\n");
 			do_gc(ssd, false); 
-			//ftl_log("checkPoint3-1\n");
 		}
 	}
 
