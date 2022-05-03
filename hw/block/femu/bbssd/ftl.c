@@ -374,9 +374,11 @@ static void ssd_init_params(struct ssdparams *spp)
     spp->secs_per_line = spp->pgs_per_line * spp->secs_per_pg;
     spp->tt_lines = spp->blks_per_lun; /* TODO: to fix under multiplanes */
 
-    spp->gc_thres_pcent = 0.75;
+    //spp->gc_thres_pcent = 0.75;
+	spp->gc_thres_pcent = 0.55;
     spp->gc_thres_lines = (int)((1 - spp->gc_thres_pcent) * spp->tt_lines);
-    spp->gc_thres_pcent_high = 0.95;
+    //spp->gc_thres_pcent_high = 0.95;
+	spp->gc_thres_pcent_high = 0.75;
     spp->gc_thres_lines_high = (int)((1 - spp->gc_thres_pcent_high) * spp->tt_lines);
     spp->enable_gc_delay = true;
 
@@ -563,10 +565,12 @@ static void ssd_init_buff(struct ssd *ssd)
 	//ssd->toFlush_state = g_malloc0(sizeof(int) *spp->pgs_maptbl);
 
 	/* initialize toFlush_state to manage toFlush and Flush list */ 
+#ifdef DAWID
 	ssd->tf = (struct toFlush_comp*)malloc(sizeof(struct toFlush_comp));
 
 	ssd->tf->toFlush_state = g_malloc0(sizeof(int) * spp->pgs_maptbl);
 	qemu_mutex_init(&ssd->tf->lock);  
+#endif
 
 	ssd->dmpg_list = NULL; 
 	ssd->tt_maptbl_dpg = 0; 
@@ -1216,11 +1220,13 @@ static uint64_t set_maptbl_pg_dirty(struct ssd *ssd, uint64_t lba)
 	uint64_t idx = get_mpg_idx(lba);
 	uint64_t accumulat = 0; 
 
+#ifdef DAWID
 	/* Update toFlush_state for timing error(?) */ 
 	qemu_mutex_lock(&ssd->tf->lock);
 	ssd->tf->toFlush_state[idx]--;
 	//ftl_log("ssd->tf->toFlush_state[%ld]: %d\n", idx, ssd->tf->toFlush_state[idx]);
 	qemu_mutex_unlock(&ssd->tf->lock);
+#endif 
 
 	/*** do program ***/
 	/* clean or dirty check */
@@ -1231,7 +1237,12 @@ static uint64_t set_maptbl_pg_dirty(struct ssd *ssd, uint64_t lba)
 	/* set the maptbl pg dirty */ 
 	ssd->maptbl_state[idx] |= (1 << DIRTY_BIT_SHIFT); 
 	//ssd->tt_maptbl_dpg++;
+#ifdef FIFO
+	add_to_dirty_mpg_list(ssd, idx);
+	ssd->tt_maptbl_dpg++;
+#endif
 point: 
+#ifdef DAWID
 	if (ssd->tf->toFlush_state[idx] == 0) { 
 	//if (ssd->tf->toFlush_state[idx] == 1) { 
 		/* add to dirty maptbl page list */ 
@@ -1241,7 +1252,7 @@ point:
 		//ftl_log("check..\n");
 		//ssd->tf->toFlush_state[idx] = 0;
 	}  
-
+#endif
 	
 	/*** ***/ 
 
@@ -1590,10 +1601,12 @@ static uint32_t ssd_buff_flush(struct ssd *ssd)
 		if (zcl_dpg_cnt != check_cnt)
 			ftl_log("flush data pages err in heap..\n");
 
+#if 1
 		/* update toFlush_state for timing error? */
 		qemu_mutex_lock(&ssd->tf->lock);
 		ssd->tf->toFlush_state[znp->mpg_idx] += check_cnt;	
 		qemu_mutex_unlock(&ssd->tf->lock);	
+#endif
 
 		ep->znp = NULL; // check_dpg_maptbl_ent bug fixing	
 		/* remove znode from zcl */
@@ -1659,11 +1672,13 @@ static uint32_t ssd_buff_flush(struct ssd *ssd)
 		ep->heap_idx = 0;	// check_dpg_maptbl_ent bug fixing	
 		if (hp_dpg_cnt != check_cnt)
 			ftl_log("flush data pages err in heap..\n");
-		
+	
+#if 1	
 		/* update toFlush_state for timing error? */
 		qemu_mutex_lock(&ssd->tf->lock);
 		ssd->tf->toFlush_state[idx] += check_cnt; 
 		qemu_mutex_unlock(&ssd->tf->lock);
+#endif
 	} 	
 
 ret: 	
@@ -1848,13 +1863,14 @@ static uint64_t ssd_buff_flush(struct ssd *ssd)
 			bp->dpg_to_flush_list->tail->next = dpg; 
 			bp->dpg_to_flush_list->tail = bp->dpg_to_flush_list->tail->next; 
 		}
-	
+
+#if 0 	
 	 	/* update toFlush_state for timing error */ 
 		uint64_t idx = get_mpg_idx(dpg->lpn); 
 		qemu_mutex_lock(&ssd->tf->lock);
 		ssd->tf->toFlush_state[idx]++; 
 		qemu_mutex_unlock(&ssd->tf->lock); 
-
+#endif
 		bp->dpg_to_flush_list->reqs++; 
 		bp->bp_reqs--;
 		
