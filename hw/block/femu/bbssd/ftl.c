@@ -1720,7 +1720,9 @@ static uint64_t ssd_buff_write(struct ssd *ssd, NvmeRequest *req)
 		 * and maintain pages accordingly. 
 		 * zero cost list: 
 		 * heap:  */
+#ifdef USE_BUFF_DEBUG_L1
 		ftl_log("lpn: %ld\n", lpn); 
+#endif
 #ifdef DEBUG_FUNC
 		debug_stime = qemu_clock_get_ns(QEMU_CLOCK_REALTIME); 
 #endif 
@@ -1911,7 +1913,9 @@ static uint64_t ssd_buff_write(struct ssd *ssd, NvmeRequest *req)
 #endif
 
 	for (lpn = start_lpn; lpn <= end_lpn; lpn++) { 
+#ifdef USE_BUFF_DEBUG_L1
 		ftl_log("lpn: %ld\n", lpn); 
+#endif
 #ifdef DEBUG_FUNC
 		debug_stime = qemu_clock_get_ns(QEMU_CLOCK_REALTIME); 
 #endif
