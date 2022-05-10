@@ -64,7 +64,7 @@ enum {
 #define LUN_BITS    (8)
 #define CH_BITS     (7)
 
-#define P_BLKS_PER_PL 1024
+#define P_BLKS_PER_PL 256
 //#define CHECK_DPG
 //#define FG_DEBUG
 //#define FEMU_DEBUG_FTL
@@ -80,10 +80,10 @@ enum {
 #ifdef USE_BUFF
 /* things that buffer needed */ 
 //#define BUFF_SIZE 1048576
-#define BUFF_SIZE 65536
+#define BUFF_SIZE 1048576
 //#define BUFF_THRESHOLD 524288
-#define BUFF_THRESHOLD 32768
-//#define BUFF_SIZE 65536
+#define BUFF_THRESHOLD 1048576
+//#define BUFF_SIZE 1048576
 //#define BUFF_SIZE 1024
 #define LINE_SIZE 1 // ssd maximum parallelism 
 #define PROTECTED_RATIO 0.01
