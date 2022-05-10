@@ -69,17 +69,19 @@ enum {
 //#define FEMU_DEBUG_FTL
 //#define ORG_VER
 #define USE_BUFF
-//#define FIFO
-#define DAWID 
+#define FIFO
+//#define DAWID 
 //#define ASYNCH
 //#define USE_BUFF_DEBUG
 //#define DAWID_BUFF
-#define RES
+//#define RES
 
 #ifdef USE_BUFF
 /* things that buffer needed */ 
-#define BUFF_SIZE 1048576
-#define BUFF_THRESHOLD 524288
+//#define BUFF_SIZE 1048576
+#define BUFF_SIZE 65536
+//#define BUFF_THRESHOLD 524288
+#define BUFF_THRESHOLD 32768
 //#define BUFF_SIZE 65536
 //#define BUFF_SIZE 1024
 #define LINE_SIZE 1 // ssd maximum parallelism 

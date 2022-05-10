@@ -332,8 +332,9 @@ static void ssd_init_params(struct ssdparams *spp)
     spp->secsz = 512;
     spp->secs_per_pg = 8;
     spp->pgs_per_blk = 256;
-    spp->blks_per_pl = 1024; /* 16GB */
-    spp->pls_per_lun = 1;
+    //spp->blks_per_pl = 1024; /* 64GB */
+    spp->blks_per_pl = 256; /* 16GB */ 
+	spp->pls_per_lun = 1;
     spp->luns_per_ch = 8;
     spp->nchs = 8;
 
@@ -374,11 +375,11 @@ static void ssd_init_params(struct ssdparams *spp)
     spp->secs_per_line = spp->pgs_per_line * spp->secs_per_pg;
     spp->tt_lines = spp->blks_per_lun; /* TODO: to fix under multiplanes */
 
-    //spp->gc_thres_pcent = 0.75;
-	spp->gc_thres_pcent = 0.55;
+    spp->gc_thres_pcent = 0.75;
+	//spp->gc_thres_pcent = 0.55;
     spp->gc_thres_lines = (int)((1 - spp->gc_thres_pcent) * spp->tt_lines);
-    //spp->gc_thres_pcent_high = 0.95;
-	spp->gc_thres_pcent_high = 0.75;
+    spp->gc_thres_pcent_high = 0.95;
+	//spp->gc_thres_pcent_high = 0.75;
     spp->gc_thres_lines_high = (int)((1 - spp->gc_thres_pcent_high) * spp->tt_lines);
     spp->enable_gc_delay = true;
 
@@ -1719,7 +1720,7 @@ static uint64_t ssd_buff_write(struct ssd *ssd, NvmeRequest *req)
 		 * and maintain pages accordingly. 
 		 * zero cost list: 
 		 * heap:  */
-		//ftl_log("lpn: %ld\n", lpn); 
+		ftl_log("lpn: %ld\n", lpn); 
 #ifdef DEBUG_FUNC
 		debug_stime = qemu_clock_get_ns(QEMU_CLOCK_REALTIME); 
 #endif 
@@ -1910,6 +1911,7 @@ static uint64_t ssd_buff_write(struct ssd *ssd, NvmeRequest *req)
 #endif
 
 	for (lpn = start_lpn; lpn <= end_lpn; lpn++) { 
+		ftl_log("lpn: %ld\n", lpn); 
 #ifdef DEBUG_FUNC
 		debug_stime = qemu_clock_get_ns(QEMU_CLOCK_REALTIME); 
 #endif
@@ -2297,7 +2299,8 @@ static void *ftl_flush_thread(void *arg)
 		}
 		//ftl_log("userdat pgs: %d, mapdat pgs: %d\n", ssd->tt_user_dat_flush_pgs, ssd->tt_maptbl_flush_pgs);   
 		if (should_gc(ssd)) { 
-			do_gc(ssd, false); 
+			//do_gc(ssd, false); 
+			do_gc(ssd, true);
 		}
 	}
 
