@@ -64,13 +64,13 @@ enum {
 #define LUN_BITS    (8)
 #define CH_BITS     (7)
 
-#define P_BLKS_PER_PL 1024
+#define P_BLKS_PER_PL 256
 //#define CHECK_DPG
 //#define FG_DEBUG
 //#define FEMU_DEBUG_FTL
 //#define ORG_VER
 #define USE_BUFF
-#define DAWID
+#define FIFO
 //#define DAWID 
 //#define ASYNCH
 //#define USE_BUFF_DEBUG

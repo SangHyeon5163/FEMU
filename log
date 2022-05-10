@@ -1,1 +1,1 @@
-sudo: x86_64-softmmu/qemu-system-x86_64: command not found
+./build-femu/run-blackbox.sh: line 22: -name: command not found
