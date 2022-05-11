@@ -76,6 +76,7 @@ enum {
 //#define USE_BUFF_DEBUG
 //#define DAWID_BUFF
 //#define RES
+#define FEMU_STAT_FTL
 
 #ifdef USE_BUFF
 /* things that buffer needed */ 
@@ -394,6 +395,14 @@ int16_t get_buff_tot_cnt(void);
 
 #define ftl_log(fmt, ...) \
     do { printf("[FEMU] FTL-Log: " fmt, ## __VA_ARGS__); } while (0)
+
+#ifdef FEMU_STAT_FTL
+#define ftl_stat(fmt, ...) \
+    do { printf("[FEMU] FTL-Stat: " fmt, ## __VA_ARGS__); } while (0)
+#else
+#define ftl_stat(fmt, ...) \
+    do { } while (0)
+#endif
 
 
 /* FEMU assert() */
