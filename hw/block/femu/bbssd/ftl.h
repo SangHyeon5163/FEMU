@@ -80,13 +80,13 @@ enum {
 #ifdef USE_BUFF
 /* things that buffer needed */ 
 //#define BUFF_SIZE 1048576
-#define BUFF_SIZE 1048576
+#define BUFF_SIZE 262144
 //#define BUFF_THRESHOLD 524288
-#define BUFF_THRESHOLD 1048576
-//#define BUFF_SIZE 1048576
+#define BUFF_THRESHOLD 262144
+//#define BUFF_SIZE 262144
 //#define BUFF_SIZE 1024
 #define LINE_SIZE 1 // ssd maximum parallelism 
-#define PROTECTED_RATIO 0.01
+#define PROTECTED_RATIO 0.5
 //#define PROTECTED_RATIO 1
 
 //unsigned char dirty_option = 0x1; 
