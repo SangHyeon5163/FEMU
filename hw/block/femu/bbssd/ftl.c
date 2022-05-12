@@ -2215,6 +2215,21 @@ static void calc_delay_maptbl_flush(struct ssd *ssd)
 } 
 #endif
 
+#ifdef RES
+static void ssd_stat_dump(struct ssd *ssd)
+{ 
+	FILE* fp = fopen("/home/shnam/femu_stat.log", "a"); 
+	
+	if (fp)
+		fprintf(fp, "ud = %d md = %d gud = %d gmd = %d\n", ssd->tt_user_dat_flush_pgs, ssd->tt_maptbl_flush_pgs, ssd->gc_user_dat_flush_pgs, ssd->gc_maptbl_flush_pgs);
+	else 
+		
+		printf("ud = %d md = %d gud = %d gmd = %d\n", ssd->tt_user_dat_flush_pgs, ssd->tt_maptbl_flush_pgs, ssd->gc_user_dat_flush_pgs, ssd->gc_maptbl_flush_pgs);
+	
+	fclose(fp);
+}
+#endif
+
 static void *ftl_flush_thread(void *arg)
 { 
 	FemuCtrl *n = (FemuCtrl *)arg; 
@@ -2263,9 +2278,10 @@ static void *ftl_flush_thread(void *arg)
 			}
 			//ftl_log("maxlat: %ld\n", maxlat);	
 			
-#ifdef RES		
-			ftl_log("userdat pgs: %d, mapdat pgs: %d\n", ssd->tt_user_dat_flush_pgs, ssd->tt_maptbl_flush_pgs);   
-			ftl_log("gc userdat pgs: %d, mapdat pgs: %d\n", ssd->gc_user_dat_flush_pgs, ssd->gc_maptbl_flush_pgs);
+#ifdef RES	
+			ssd_stat_dump(ssd);	
+			//ftl_log("userdat pgs: %d, mapdat pgs: %d\n", ssd->tt_user_dat_flush_pgs, ssd->tt_maptbl_flush_pgs);   
+			//ftl_log("gc userdat pgs: %d, mapdat pgs: %d\n", ssd->gc_user_dat_flush_pgs, ssd->gc_maptbl_flush_pgs);
 #endif
 			/* sleep during max latency */
 			stime = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
