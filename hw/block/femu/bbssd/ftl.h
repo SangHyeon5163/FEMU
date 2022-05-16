@@ -70,12 +70,13 @@ enum {
 //#define FEMU_DEBUG_FTL
 //#define ORG_VER
 #define USE_BUFF
-#define FIFO
+#define DAWID
 //#define DAWID 
 //#define ASYNCH
 //#define USE_BUFF_DEBUG
 //#define DAWID_BUFF
-#define RES
+//#define RES
+#define GCRES
 
 #ifdef USE_BUFF
 /* things that buffer needed */ 
@@ -350,6 +351,9 @@ struct ssd {
 	struct dmpg_node *dmpg_list;
 	struct ppa *gtd; /* page level meta mapping table */ 
 	uint64_t *g_rmap; /* reverse gtd, assume it's stored in OOB */
+
+	int tt_gc_valid_pgs; 
+	int tt_gc_block;
 #endif
 	uint64_t *rmap;     /* reverse mapptbl, assume it's stored in OOB */
     struct write_pointer wp;

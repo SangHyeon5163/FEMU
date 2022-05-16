@@ -581,6 +581,8 @@ static void ssd_init_buff(struct ssd *ssd)
 	ssd->gc_maptbl_flush_pgs = 0; 
 	ssd->gc_user_dat_flush_pgs = 0; 
 
+	ssd->tt_gc_valid_pgs = 0;
+	ssd->tt_gc_block = 0;
 #ifdef DAWID
 	/* initialize max heap */
 	bp->mpg_value_heap = g_malloc0(sizeof(struct max_heap));
@@ -1069,12 +1071,27 @@ static struct line *select_victim_line(struct ssd *ssd, bool force)
     return victim_line;
 }
 
+#ifdef GCRES
+static void ssd_stat_dump_gc(struct ssd *ssd) 
+{ 
+	FILE* fp = fopen("/home/shnam/femu_stat_gc.log", "a");
+
+	if (fp)
+		fprintf(fp, "vpg = %d ttgb = %d\n", ssd->tt_gc_valid_pgs, ssd->tt_gc_block); 
+	else 
+		printf("vpg = %d ttgb = %d\n", ssd->tt_gc_valid_pgs, ssd->tt_gc_block); 
+
+	fclose(fp); 
+} 
+#endif
+
 /* here ppa identifies the block we want to clean */
 static void clean_one_block(struct ssd *ssd, struct ppa *ppa)
 {
     struct ssdparams *spp = &ssd->sp;
     struct nand_page *pg_iter = NULL;
     int cnt = 0;
+    //ssd->tt_gc_valid_pgs = 0;
 
     for (int pg = 0; pg < spp->pgs_per_blk; pg++) {
         ppa->g.pg = pg;
@@ -1088,10 +1105,15 @@ static void clean_one_block(struct ssd *ssd, struct ppa *ppa)
 #if 0 
 	    	set_rmap_ent(ssd, INVALID_LPN, ppa);
 #endif
+	   		ssd->tt_gc_valid_pgs++; 	
             cnt++;
         }
     }
 
+	ssd->tt_gc_block++; 
+#ifdef GCRES
+    ssd_stat_dump_gc(ssd);  
+#endif
     ftl_assert(get_blk(ssd, ppa)->vpc == cnt);
 }
 
