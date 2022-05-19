@@ -358,6 +358,7 @@ static void ssd_init_params(struct ssdparams *spp)
 	spp->pgs_maptbl = spp->tt_pgs / _PME; 
 	ftl_log("ssd_init_params: %d  spp->tt_pgs: %d\n", spp->pgs_maptbl, spp->tt_pgs);
 	spp->pgs_protected = spp->pgs_maptbl * PROTECTED_RATIO; 
+	ftl_log("sssssss  spp->pgs_protected %d \n", spp->pgs_protected); 
 #endif
 
     spp->blks_per_lun = spp->blks_per_pl * spp->pls_per_lun;
@@ -2252,6 +2253,20 @@ static void ssd_stat_dump(struct ssd *ssd)
 }
 #endif
 
+#ifdef LPNLOG
+static void ssd_stat_dump_lpn(struct ssd *ssd, uint64_t lpn)
+{
+	FILE *fp = fopen("/home/shnam/femu_stat_lpn.log", "a"); 
+
+	if (fp)
+		fprintf(fp, "lpn = %ld\n", lpn); 
+	else 
+		printf("lpn = %ld\n", lpn); 
+
+	fclose(fp); 
+} 
+#endif
+
 static void *ftl_flush_thread(void *arg)
 { 
 	FemuCtrl *n = (FemuCtrl *)arg; 
@@ -2286,7 +2301,10 @@ static void *ftl_flush_thread(void *arg)
 				//ftl_log("curlat: %ld, maxlat: %ld\n", curlat, maxlat);
 				maxlat = (curlat > maxlat) ? curlat : maxlat; 
 				//accumulat += maxlat; 
-				
+#ifdef LPNLOG
+				/* dump logical page number */ 
+				ssd_stat_dump_lpn(ssd, dpg->lpn); 
+#endif 				
 				/* update maptbl for the flushed data */ 
 				set_maptbl_pg_dirty(ssd, dpg->lpn); 
 				//accumulat += maxlat; 
@@ -2320,7 +2338,8 @@ static void *ftl_flush_thread(void *arg)
 			
 			//ftl_log("check4\n");
 			//ftl_log("ssd->tt_maptbl dpg: %d, spp->pgs_protected: %d\n", ssd->tt_maptbl_dpg, spp->pgs_protected);
-			while (ssd->tt_maptbl_dpg >= spp->pgs_protected) { 
+			//while (ssd->tt_maptbl_dpg >= spp->pgs_protected) { 
+			while (ssd->tt_maptbl_dpg > spp->pgs_protected) { 
 				//ftl_log("check\n");
 				calc_delay_maptbl_flush(ssd);			
 			}
