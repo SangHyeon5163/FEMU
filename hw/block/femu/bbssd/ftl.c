@@ -115,17 +115,20 @@ static inline void set_rmap_ent(struct ssd *ssd, uint64_t lpn, struct ppa *ppa)
 
 static inline int victim_line_cmp_pri(pqueue_pri_t next, pqueue_pri_t curr)
 {
-    return (next > curr);
+    //return (next > curr);
+	return (next < curr);
 }
 
 static inline pqueue_pri_t victim_line_get_pri(void *a)
 {
-    return ((struct line *)a)->vpc;
+    //return ((struct line *)a)->vpc;
+	return ((struct line *)a)->ipc; 
 }
 
 static inline void victim_line_set_pri(void *a, pqueue_pri_t pri)
 {
-    ((struct line *)a)->vpc = pri;
+    //((struct line *)a)->vpc = pri;
+    ((struct line *)a)->ipc = pri;
 }
 
 static inline size_t victim_line_get_pos(void *a)
@@ -2267,6 +2270,55 @@ static void ssd_stat_dump_lpn(struct ssd *ssd, uint64_t lpn)
 } 
 #endif
 
+#ifdef BLKDUMP
+static void ssd_stat_dump_allblock(struct ssd *ssd)
+{ 
+	FILE *fp = fopen("/home/shnam/femu_stat_allblock.log", "a"); 
+	struct ssdparams *spp = &ssd->sp; 
+	struct nand_page *pg_iter = NULL; 
+	struct ppa ppa;
+	int dump_valid_pgs; 
+//	int dump_cnt;		
+	int ch, lun, blk; 
+
+	for (blk = 0; blk < spp->blks_per_pl; blk++) { 
+		if (fp)
+			fprintf(fp, "============ line_id = %d =============\n", blk);
+		else  
+			printf("============ line_id = %d =============\n", blk);
+
+		for (ch = 0; ch < spp->nchs; ch++) { 
+			for (lun = 0; lun < spp->luns_per_ch; lun++) { 
+				dump_valid_pgs = 0; 				
+
+				for (int pg = 0; pg < spp->pgs_per_blk; pg++) { 
+					ppa.g.ch = ch; 
+					ppa.g.lun = lun; 
+					ppa.g.pl = 0;
+					ppa.g.blk = blk; 
+					ppa.g.pg = pg; 
+					pg_iter = get_pg(ssd, &ppa); 
+		
+					ftl_assert(pg_iter->status != PG_FREE); 
+					if (pg_iter->status == PG_VALID) { 
+						dump_valid_pgs++; 
+					}
+				}
+				if (fp) 	
+					fprintf(fp, "ch = %d lun = %d dump_valid_pgs = %d\n", ch, lun, dump_valid_pgs);  
+				else 
+					printf("ch = %d lun = %d dump_valid_pgs = %d\n", ch, lun, dump_valid_pgs);  
+			} 
+			
+			//fprintf(fp, "\n");
+		} 
+		fprintf(fp, "\n");
+	}
+
+	fclose(fp); 
+}	 
+#endif
+
 static void *ftl_flush_thread(void *arg)
 { 
 	FemuCtrl *n = (FemuCtrl *)arg; 
@@ -2360,9 +2412,13 @@ static void *ftl_flush_thread(void *arg)
 		}
 		//ftl_log("userdat pgs: %d, mapdat pgs: %d\n", ssd->tt_user_dat_flush_pgs, ssd->tt_maptbl_flush_pgs);   
 		if (should_gc(ssd)) { 
-			//do_gc(ssd, false); 
-			do_gc(ssd, true);
+			do_gc(ssd, false); 
+			//do_gc(ssd, true);
 		}
+#ifdef BLKDUMP
+		if (ssd->tt_user_dat_flush_pgs == 3000000)  
+			ssd_stat_dump_allblock(ssd);	
+#endif 
 	}
 
 	return NULL; 

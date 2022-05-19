@@ -17,16 +17,16 @@ enum {
     NAND_WRITE = 1,
     NAND_ERASE = 2,
 
-	NAND_READ_LATENCY = 4000, 
+	//NAND_READ_LATENCY = 4000, 
     //NAND_READ_LATENCY = 40000,
-	NAND_PROG_LATENCY = 20000,
+	//NAND_PROG_LATENCY = 20000,
     //NAND_PROG_LATENCY = 200000, 
-	NAND_ERASE_LATENCY = 200000,
+	//NAND_ERASE_LATENCY = 200000,
     //NAND_ERASE_LATENCY = 2000000,
 
-    //NAND_READ_LATENCY = 0,
-    //NAND_PROG_LATENCY = 0,
-    //NAND_ERASE_LATENCY = 0,
+    NAND_READ_LATENCY = 0,
+    NAND_PROG_LATENCY = 0,
+    NAND_ERASE_LATENCY = 0,
 };
 
 enum {
@@ -75,17 +75,18 @@ enum {
 //#define ASYNCH
 //#define USE_BUFF_DEBUG
 //#define DAWID_BUFF
-//#define RES
+#define RES
 //#define GCRES
-#define LPNLOG
+//#define LPNLOG
+//#define BLKDUMP
 
 #ifdef USE_BUFF
 /* things that buffer needed */ 
 //#define BUFF_SIZE 1048576
-#define BUFF_SIZE 262144
+#define BUFF_SIZE 16384
 //#define BUFF_THRESHOLD 524288
-#define BUFF_THRESHOLD 262144
-//#define BUFF_SIZE 262144
+#define BUFF_THRESHOLD 16384
+//#define BUFF_SIZE 16384
 //#define BUFF_SIZE 1024
 #define LINE_SIZE 1 // ssd maximum parallelism 
 #define PROTECTED_RATIO 0.01
