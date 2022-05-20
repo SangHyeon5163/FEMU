@@ -2,7 +2,7 @@
 
 if [[ $# -lt 4 ]]; then
     echo “Usage: ./0_run.sh [DEVSZ_GB] [POLICY] [BUFFSZ_GB] [PROTECTED_RATIO] [WT_RES]”
-    echo “Usage: ./0_run.sh [16 64] [FIFO DAWID] [1 2 4 8 40M] [0.01 0.05] [1 0]”
+    echo “Usage: ./0_run.sh [16 64] [FIFO DAWID] [1 2 4 8] [0.01 0.05] [1 0]”
 	#echo "If you want print Write Traffic"
 	#echo "-- Usage: ./0_run.sh [16] [FIFO] [1] [0.01] [1] --"
     exit
@@ -12,7 +12,6 @@ echo "DEVICE_SIZE $1" > femu.conf
 echo "POLICY $2" >> femu.conf
 echo "BUFFSZ_GB $3" >> femu.conf
 echo "PROTECTED_RATIO $4" >> femu.conf
-echo "WT_RES $5" >> femu.conf
 
 DEVICE_SIZE=$1
 if [ ${DEVICE_SIZE} -eq 64 ];then
@@ -35,8 +34,6 @@ elif [[ $BUFFSZ_GB == 2 ]]; then
 	BUFF_SIZE=$(expr $BUFF_SIZE / 2)
 elif [[ $BUFFSZ_GB == 8 ]]; then
 	BUFF_SIZE=$(expr $BUFF_SIZE * 2)
-elif [[ $BUFFSZ_GB == 40 ]]; then 
-	BUFF_SIZE=$(expr $BUFF_SIZE / 64)
 fi
 
 echo $BUFF_SIZE
@@ -67,6 +64,6 @@ elif [ ${WT_RES} -eq 0 ];then
 	        | sed -e "s/BUFF_THRESHOLD 32768/BUFF_THRESHOLD $BUFF_THRESHOLD/" > ../hw/block/femu/bbssd/ftl.h
 fi    
 
-./femu-compile.sh
+#./femu-compile.sh
 ./run-blackbox.sh
 

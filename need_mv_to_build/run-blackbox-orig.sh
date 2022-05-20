@@ -5,6 +5,7 @@
 # image directory
 #IMGDIR=$HOME/iccad-images
 IMGDIR=/home/shnam/iccad-images
+#IMGDIR=/home/shnam/sm-images
 # Virtual machine disk image
 OSIMGF=$IMGDIR/u20s.qcow2
 
