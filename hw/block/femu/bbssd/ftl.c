@@ -1267,10 +1267,9 @@ static uint64_t set_maptbl_pg_dirty(struct ssd *ssd, uint64_t lba)
 #ifdef FIFO
 	add_to_dirty_mpg_list(ssd, idx);
 	ssd->tt_maptbl_dpg++;
-#endif
-point: 
+#endif 
 #ifdef DAWID
-	if (ssd->tf->toFlush_state[idx] == 0) { 
+	//if (ssd->tf->toFlush_state[idx] == 0) { 
 	//if (ssd->tf->toFlush_state[idx] == 1) { 
 		/* add to dirty maptbl page list */ 
 		add_to_dirty_mpg_list(ssd, idx); 
@@ -1278,7 +1277,7 @@ point:
 		ssd->tt_maptbl_dpg++; 
 		//ftl_log("check..\n");
 		//ssd->tf->toFlush_state[idx] = 0;
-	}  
+	//}  
 #endif
 	
 	/*** ***/ 
@@ -1302,6 +1301,8 @@ point:
 	ftl_log("tt_maptbl_dpgs = %d protected = %d\n", ssd->tt_maptbl_dpg, spp->pgs_protected);
 #endif
 #endif
+
+point:
 	return accumulat;
 }
 #endif
@@ -2391,6 +2392,7 @@ static void *ftl_flush_thread(void *arg)
 			//ftl_log("check4\n");
 			//ftl_log("ssd->tt_maptbl dpg: %d, spp->pgs_protected: %d\n", ssd->tt_maptbl_dpg, spp->pgs_protected);
 			//while (ssd->tt_maptbl_dpg >= spp->pgs_protected) { 
+			//ftl_log("ssd->tt_maptbl_dpg: %d, pgs_protected: %d\n", ssd->tt_maptbl_dpg, spp->pgs_protected); 
 			while (ssd->tt_maptbl_dpg > spp->pgs_protected) { 
 				//ftl_log("check\n");
 				calc_delay_maptbl_flush(ssd);			

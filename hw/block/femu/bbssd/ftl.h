@@ -17,9 +17,9 @@ enum {
     NAND_WRITE = 1,
     NAND_ERASE = 2,
 
-	NAND_READ_LATENCY = 4000, 
-	NAND_PROG_LATENCY = 400000,
-	NAND_ERASE_LATENCY = 2000000,
+	NAND_READ_LATENCY = 60000, 
+	NAND_PROG_LATENCY = 700000,
+	NAND_ERASE_LATENCY = 3000000,
 
 	/* origin */
     //NAND_READ_LATENCY = 40000,
@@ -77,7 +77,7 @@ enum {
 //#define ASYNCH
 //#define USE_BUFF_DEBUG
 //#define DAWID_BUFF
-//#define RES
+#define RES
 //#define GCRES
 //#define LPNLOG
 //#define BLKDUMP
@@ -91,7 +91,7 @@ enum {
 //#define BUFF_SIZE 16384
 //#define BUFF_SIZE 1024
 #define LINE_SIZE 1 // ssd maximum parallelism 
-#define PROTECTED_RATIO 0.5
+#define PROTECTED_RATIO 0.1
 //#define PROTECTED_RATIO 1
 
 //unsigned char dirty_option = 0x1; 
