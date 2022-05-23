@@ -236,6 +236,31 @@ void pqueue_print(pqueue_t *q, FILE *out, pqueue_print_entry_f print)
     pqueue_free(dup);
 }
 
+// EUNJI 
+void pqueue_print_victim_line(pqueue_t *q, FILE *out)
+{
+    pqueue_t *dup;
+
+    dup = pqueue_init(q->size, q->cmppri, q->getpri, set_pri, q->getpos, set_pos);
+    dup->size = q->size;
+    dup->avail = q->avail;
+    dup->step = q->step;
+
+    memcpy(dup->d, q->d, (q->size * sizeof(void *)));
+
+//    while ((e = pqueue_pop(dup)))
+//		fprintf(out, "%d ", e.get_pri() 
+	while(pqueue_peek(dup)) {
+		fprintf(out, "%lld ", dup->getpri(pqueue_peek(dup)));
+		pqueue_pop(dup);
+	}
+	fprintf(out, "\n");
+
+    pqueue_free(dup);
+}
+
+
+
 static int subtree_is_valid(pqueue_t *q, int pos)
 {
     if (left(pos) < q->size) {

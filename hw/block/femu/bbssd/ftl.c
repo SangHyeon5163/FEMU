@@ -115,17 +115,20 @@ static inline void set_rmap_ent(struct ssd *ssd, uint64_t lpn, struct ppa *ppa)
 
 static inline int victim_line_cmp_pri(pqueue_pri_t next, pqueue_pri_t curr)
 {
-    return (next > curr);
+    return (next < curr);
+    //return (next > curr);
 }
 
 static inline pqueue_pri_t victim_line_get_pri(void *a)
 {
-    return ((struct line *)a)->vpc;
+    return ((struct line *)a)->ipc;
+    //return ((struct line *)a)->vpc;
 }
 
 static inline void victim_line_set_pri(void *a, pqueue_pri_t pri)
 {
-    ((struct line *)a)->vpc = pri;
+    ((struct line *)a)->ipc = pri;
+    //((struct line *)a)->vpc = pri;
 }
 
 static inline size_t victim_line_get_pos(void *a)
@@ -1059,8 +1062,13 @@ static struct line *select_victim_line(struct ssd *ssd, bool force)
     }
 
     if (!force && victim_line->ipc < ssd->sp.pgs_per_line / 8) {
+		ftl_log("fail: victim_line->vpc = %d, victim_line->ipc = %d ssd->sp.pgs_per_line = %d\n", 
+			victim_line->vpc, victim_line->ipc, ssd->sp.pgs_per_line);
         return NULL;
     }
+
+	ftl_log("success: victim_line->vpc = %d, victim_line->ipc = %d ssd->sp.pgs_per_line = %d\n", 
+			victim_line->vpc, victim_line->ipc, ssd->sp.pgs_per_line);
 
     pqueue_pop(lm->victim_line_pq);
     lm->victim_line_cnt--;
@@ -1114,11 +1122,26 @@ static int do_gc(struct ssd *ssd, bool force)
     struct ppa ppa;
     int ch, lun;
 	
-    //ftl_log("do_gc\n");
+    ftl_log("do_gc\n");
+	
+#ifdef FEMU_STAT_FTL
+	struct line_mgmt *lm = &ssd->lm;
+	FILE* gcfp = fopen("/home/ejlee/femu_gc_stat.log", "a");
+	fprintf(gcfp, "victim_line_stat:\n");
+	pqueue_print_victim_line (lm->victim_line_pq, gcfp);
+	fclose(gcfp);
+#endif
+
     victim_line = select_victim_line(ssd, force);
     if (!victim_line) {
         return -1;
     }
+
+#ifdef FEMU_STAT_FTL
+	gcfp = fopen("/home/ejlee/femu_gc_stat.log", "a");
+	fprintf(gcfp, "victim_line vpc = %d ipc = %d\n", victim_line->vpc, victim_line->ipc);
+	fclose(gcfp);
+#endif
     
     //ftl_log("check1\n");
     ppa.g.blk = victim_line->id;
@@ -1497,7 +1520,8 @@ static uint64_t ssd_buff_flush_one_page(struct ssd *ssd, struct dpg_node* dpg)
 
 	//ftl_log("3-1\n");
 	while (should_gc_high(ssd)) { 
-		r = do_gc(ssd, true); 
+		//r = do_gc(ssd, true); 
+		r = do_gc(ssd, false); 
 		if (r == -1) 
 			break; 
 	} 
@@ -2317,7 +2341,7 @@ static void *ftl_flush_thread(void *arg)
 		//ftl_log("userdat pgs: %d, mapdat pgs: %d\n", ssd->tt_user_dat_flush_pgs, ssd->tt_maptbl_flush_pgs);   
 		if (should_gc(ssd)) { 
 			//do_gc(ssd, false); 
-			do_gc(ssd, true);
+			do_gc(ssd, false);
 		}
 	}
 

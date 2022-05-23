@@ -70,7 +70,7 @@ enum {
 //#define FEMU_DEBUG_FTL
 //#define ORG_VER
 #define USE_BUFF
-#define DAWID
+#define FIFO
 //#define DAWID 
 //#define ASYNCH
 //#define USE_BUFF_DEBUG
