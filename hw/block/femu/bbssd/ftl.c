@@ -164,6 +164,7 @@ static void ssd_init_lines(struct ssd *ssd)
         line->id = i;
         line->ipc = 0;
         line->vpc = 0;
+		line->inq = 0;
         /* initialize all the lines as free lines */
         QTAILQ_INSERT_TAIL(&lm->free_line_list, line, entry);
         lm->free_line_cnt++;
@@ -282,6 +283,8 @@ static void ssd_advance_write_pointer(struct ssd *ssd)
                     /* there must be some invalid pages in this line */
                     ftl_assert(wpp->curline->ipc > 0);
                     pqueue_insert(lm->victim_line_pq, wpp->curline);
+					/* line status check */
+					wpp->curline->inq = 1;
                     lm->victim_line_cnt++;
                 }
                 /* current line is used up, pick another empty line */
@@ -857,14 +860,29 @@ static void mark_page_invalid(struct ssd *ssd, struct ppa *ppa)
         ftl_assert(line->ipc == 0);
         was_full_line = true;
     }
+/*
     line->ipc++;
     ftl_assert(line->vpc > 0 && line->vpc <= spp->pgs_per_line);
     line->vpc--;
+*/ 
+	/* update line status */ 
+	if (line->inq) { 
+		//int old_ipc = line->ipc; 	
+		pqueue_change_priority(lm->victim_line_pq, line->ipc+1, line); 
+		//if (line->ipc != (old_ipc + 1))
+			//ftl_log("old = %d new = %d\n", old_ipc, line->ipc); 
+	} else { 
+		line->ipc++; 
+	} 
+	line->vpc--; 
+
     if (was_full_line) {
         /* move line: "full" -> "victim" */
         QTAILQ_REMOVE(&lm->full_line_list, line, entry);
         lm->full_line_cnt--;
         pqueue_insert(lm->victim_line_pq, line);
+		/* line status check */ 
+		line->inq = 1; 
         lm->victim_line_cnt++;
     }
 }
@@ -1070,6 +1088,8 @@ static struct line *select_victim_line(struct ssd *ssd, bool force)
     }
 
     pqueue_pop(lm->victim_line_pq);
+	/* line status check */
+	victim_line->inq = 0; 
     lm->victim_line_cnt--;
 
     /* victim_line is a danggling node now */

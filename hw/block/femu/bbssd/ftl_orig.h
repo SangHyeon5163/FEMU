@@ -295,6 +295,7 @@ typedef struct line {
     QTAILQ_ENTRY(line) entry; /* in either {free,victim,full} list */
     /* position in the priority queue for victim lines */
     size_t                  pos;
+	uint16_t inq;
 } line;
 
 /* wp: record next write addr */
