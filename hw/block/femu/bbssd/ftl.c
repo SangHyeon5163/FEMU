@@ -9,6 +9,7 @@ int bp_cnt = 0;
 int host_rq_cnt = 0;
 int trt_rq_cnt = 0;
 int debug_cnt = 0;
+int ttmp = 0;
 
 static void *ftl_thread(void *arg);
 static void *ftl_flush_thread(void *arg);
@@ -1540,18 +1541,41 @@ static uint64_t ssd_buff_flush_one_page(struct ssd *ssd, struct dpg_node* dpg)
 
 	set_maptbl_ent(ssd, lpn, &ppa); 
 #endif
+#ifdef FIXED
 	if (ssd->maptbl[lpn].bfa == dpg) { 
 		/* set inexisted bit */
 		ssd->maptbl[lpn].bfa = INEXIST_BUFF; 
 		/* update maptbl ppa info */ 
 		set_maptbl_ent(ssd, lpn, &ppa); 
+	} else { 
+		ttmp++; 
 	} 
 
 	/* update rmap */ 
 	set_rmap_ent(ssd, lpn, &ppa); 
 
 	mark_page_valid(ssd, &ppa); 
-	
+#endif 
+	if (ssd->maptbl[lpn].bfa == dpg) { 
+		/* set inexisted bit */ 
+		ssd->maptbl[lpn].bfa = INEXIST_BUFF; 
+		/* update maptbl ppa info */
+		set_maptbl_ent(ssd, lpn, &ppa); 
+		/* update rmap */ 
+		set_rmap_ent(ssd, lpn, &ppa); 
+		mark_page_valid(ssd, &ppa); 
+	} else { 
+		/* set inexisted bit */
+		ssd->maptbl[lpn].bfa = INEXIST_BUFF; 
+		/* update maptbl ppa info */
+		set_maptbl_ent(ssd, lpn, &ppa); 
+		/* temporal update rmap */
+		mark_page_valid(ssd, &ppa);
+		/* finally update rmap */
+		mark_page_invalid(ssd, &ppa); 
+		set_rmap_ent(ssd, INVALID_LPN, &ppa); 
+	} 	
+
 	//ftl_log("3-3\n");
 	/* need to advance the write pointer here */ 
 	ssd_advance_write_pointer(ssd); 
@@ -2121,6 +2145,13 @@ static void calc_delay_maptbl_flush(struct ssd *ssd)
 
 	for (int i = 0; i < 64; i++) { 
 		/* sanghyeon fixed */ 
+#if 0
+		while (should_gc_high(ssd)) { 
+			int r = do_gc(ssd, true); 
+			if (r == -1)
+				break;
+		} 		
+#endif
 		idx = ssd->dmpg_list->idx;
 		ssd->maptbl_state[idx] &= ~(1 << DIRTY_BIT_SHIFT);
 
@@ -2160,7 +2191,11 @@ static void calc_delay_maptbl_flush(struct ssd *ssd)
 
 		tt_flush_mpgs++;
 	}
-	
+#if 0	
+	if (should_gc(ssd)) { 
+		do_gc(ssd, false);
+	} 
+#endif
 	stime = qemu_clock_get_ns(QEMU_CLOCK_REALTIME); 
 	while (1) { 
 		now = qemu_clock_get_ns(QEMU_CLOCK_REALTIME); 
@@ -2281,6 +2316,7 @@ static void ssd_stat_dump_allblock(struct ssd *ssd)
 	int dump_valid_pgs; 
 //	int dump_cnt;		
 	int ch, lun, blk; 
+	int line_tt_valid_pgs; 
 
 	for (blk = 0; blk < spp->blks_per_pl; blk++) { 
 		if (fp)
@@ -2288,6 +2324,7 @@ static void ssd_stat_dump_allblock(struct ssd *ssd)
 		else  
 			printf("============ line_id = %d =============\n", blk);
 
+		line_tt_valid_pgs = 0;
 		for (ch = 0; ch < spp->nchs; ch++) { 
 			for (lun = 0; lun < spp->luns_per_ch; lun++) { 
 				dump_valid_pgs = 0; 				
@@ -2309,11 +2346,13 @@ static void ssd_stat_dump_allblock(struct ssd *ssd)
 					fprintf(fp, "ch = %d lun = %d dump_valid_pgs = %d\n", ch, lun, dump_valid_pgs);  
 				else 
 					printf("ch = %d lun = %d dump_valid_pgs = %d\n", ch, lun, dump_valid_pgs);  
-			} 
-			
-			//fprintf(fp, "\n");
+				
+				line_tt_valid_pgs += dump_valid_pgs;
+			} 	
+			//fprintf(fp, "\nline_id = %d line_tt_valid_pgs = %d\n", blk, line_tt_valid_pgs);
 		} 
 		fprintf(fp, "\n");
+		fprintf(fp, "\nline_id = %d line_tt_valid_pgs = %d\n\n", blk, line_tt_valid_pgs);
 	}
 
 	fclose(fp); 
@@ -2417,8 +2456,11 @@ static void *ftl_flush_thread(void *arg)
 			do_gc(ssd, false); 
 			//do_gc(ssd, true);
 		}
+		
+		if (ssd->tt_user_dat_flush_pgs == 16000000)
+			ftl_log("ttmp: %d\n", ttmp);
 #ifdef BLKDUMP
-		if (ssd->tt_user_dat_flush_pgs == 3000000)  
+		if (ssd->tt_user_dat_flush_pgs == 16000000)  
 			ssd_stat_dump_allblock(ssd);	
 #endif 
 	}

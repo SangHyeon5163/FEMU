@@ -80,7 +80,7 @@ enum {
 //#define RES
 //#define GCRES
 //#define LPNLOG
-//#define BLKDUMP
+#define BLKDUMP
 
 #ifdef USE_BUFF
 /* things that buffer needed */ 

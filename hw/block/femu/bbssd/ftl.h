@@ -80,7 +80,7 @@ enum {
 #define RES
 //#define GCRES
 //#define LPNLOG
-//#define BLKDUMP
+#define BLKDUMP
 
 #ifdef USE_BUFF
 /* things that buffer needed */ 
@@ -91,7 +91,7 @@ enum {
 //#define BUFF_SIZE 16384
 //#define BUFF_SIZE 1024
 #define LINE_SIZE 1 // ssd maximum parallelism 
-#define PROTECTED_RATIO 0.1
+#define PROTECTED_RATIO 1
 //#define PROTECTED_RATIO 1
 
 //unsigned char dirty_option = 0x1; 
