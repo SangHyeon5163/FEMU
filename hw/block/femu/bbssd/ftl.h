@@ -91,7 +91,7 @@ enum {
 //#define BUFF_SIZE 16384
 //#define BUFF_SIZE 1024
 #define LINE_SIZE 1 // ssd maximum parallelism 
-#define PROTECTED_RATIO 0.5
+#define PROTECTED_RATIO 0.01
 //#define PROTECTED_RATIO 1
 
 //unsigned char dirty_option = 0x1; 
