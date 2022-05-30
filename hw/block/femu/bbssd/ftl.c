@@ -841,7 +841,9 @@ static void mark_page_invalid(struct ssd *ssd, struct ppa *ppa)
     /* update corresponding page status */
     pg = get_pg(ssd, ppa);
     //ftl_log("mark_page_invalid: %d\n", pg->status); 
-    ftl_assert(pg->status == PG_VALID);
+    //ftl_assert(pg->status == PG_VALID);
+    if (pg->status == PG_INVALID) 
+		return; 
     pg->status = PG_INVALID;
 
 	//ftl_log("2\n");
@@ -1214,6 +1216,7 @@ static uint64_t ssd_read(struct ssd *ssd, NvmeRequest *req)
     uint64_t lpn;
     uint64_t sublat, maxlat = 0;
 
+	//ftl_log("ssd_read...\n");
 #if 0
     if (end_lpn >= spp->tt_pgs) {
         ftl_err("start_lpn=%"PRIu64", end_lpn=%"PRIu64", tt_pgs=%d\n", start_lpn, end_lpn, ssd->sp.tt_pgs);
@@ -1483,9 +1486,13 @@ static void add_to_zcl(struct ssd *ssd, uint64_t midx)
 { 
 
 	struct ssd_buff* bp = &ssd->buff;
-
+retry: 
 	if(ssd->maptbl_state[midx] & (1 << EXIST_IN_ZCL_BIT_SHIFT)) {
 		struct zcl_node *np = bp->dpg_tbl[midx].znp; 
+		if (np == NULL) { 
+			ssd->maptbl_state[midx] &= (1 << EXIST_IN_ZCL_BIT_SHIFT); //off
+			goto retry; 
+		} 
 		np->dpg_cnt++; 
 		goto out;
 	} 
@@ -1839,7 +1846,8 @@ static uint64_t ssd_buff_write(struct ssd *ssd, NvmeRequest *req)
 		ppa = get_maptbl_ent(ssd, lpn); 
 
 		//ftl_log("check3\n");
-		if (mapped_ppa(&ppa)) { 
+		//if (mapped_ppa(&ppa)) { 
+		if (mapped_ppa(&ppa) && get_rmap_ent(ssd, &ppa) == lpn) { 
 			/* update old page information first */
 			mark_page_invalid(ssd, &ppa); 
 			set_rmap_ent(ssd, INVALID_LPN, &ppa); 
@@ -2020,7 +2028,8 @@ static uint64_t ssd_buff_write(struct ssd *ssd, NvmeRequest *req)
 		/* update mapping table entry to point to buffer address */ 
 		ppa = get_maptbl_ent(ssd, lpn); 
 
-		if (mapped_ppa(&ppa)) { 
+		//if (mapped_ppa(&ppa)) { 
+		if (mapped_ppa(&ppa) && get_rmap_ent(ssd, &ppa) == lpn) { 
 			/* update old page information first */ 
 			mark_page_invalid(ssd, &ppa); 
 			set_rmap_ent(ssd, INVALID_LPN, &ppa); 
@@ -2178,7 +2187,8 @@ static void calc_delay_maptbl_flush(struct ssd *ssd)
 		struct ppa ppa = get_gtd_ent(ssd, idx); // lpn >> idx ??  
 		
 		/* update old page information first */
-		if (mapped_ppa(&ppa)) { 
+		//if (mapped_ppa(&ppa)) { 
+		if (mapped_ppa(&ppa) && get_g_rmap_ent(ssd, &ppa) == idx) { 
 			mark_page_invalid(ssd, &ppa); 
 			set_g_rmap_ent(ssd, INVALID_LPN, &ppa);
 		} 
