@@ -644,6 +644,7 @@ void ssd_init(FemuCtrl *n)
 
     /* initialize maptbl */
     ssd_init_maptbl(ssd);
+	qemu_mutex_init(&ssd->maptbl_lock);
 
     /* initialize rmap */
     ssd_init_rmap(ssd);
@@ -1175,6 +1176,7 @@ static int do_gc(struct ssd *ssd, bool force)
               victim_line->ipc, ssd->lm.victim_line_cnt, ssd->lm.full_line_cnt,
               ssd->lm.free_line_cnt);
 
+	qemu_mutex_lock(&ssd->maptbl_lock); 
     /* copy back valid data */
     //ftl_log("check2\n");
     for (ch = 0; ch < spp->nchs; ch++) {
@@ -1201,6 +1203,7 @@ static int do_gc(struct ssd *ssd, bool force)
     /* update line status */
     //ftl_log("check3\n"); 
     mark_line_free(ssd, &ppa);
+	qemu_mutex_unlock(&ssd->maptbl_lock);
 
     return 0;
 }
@@ -1556,6 +1559,8 @@ static uint64_t ssd_buff_flush_one_page(struct ssd *ssd, struct dpg_node* dpg)
 		if (r == -1) 
 			break; 
 	} 
+
+	qemu_mutex_lock(&ssd->maptbl_lock);
 	//ftl_log("3-2\n");
 	ppa = get_maptbl_ent(ssd, lpn); 
 
@@ -1606,6 +1611,8 @@ static uint64_t ssd_buff_flush_one_page(struct ssd *ssd, struct dpg_node* dpg)
 	//ftl_log("3-3\n");
 	/* need to advance the write pointer here */ 
 	ssd_advance_write_pointer(ssd); 
+
+	qemu_mutex_unlock(&ssd->maptbl_lock);
 	
 	//ftl_log("3-1\n");
 	struct nand_cmd swr; 
@@ -1807,6 +1814,7 @@ static uint64_t ssd_buff_write(struct ssd *ssd, NvmeRequest *req)
 		uint64_t idx = get_mpg_idx(lpn); 	
 		//check_dpg_maptbl_ent(ssd, idx);
 
+		qemu_mutex_lock(&ssd->maptbl_lock);
 		if (is_maptbl_pg_dirty(ssd, idx)) {
 			r_zl_cnt++; 
 			add_to_zcl(ssd, idx);
@@ -1814,6 +1822,7 @@ static uint64_t ssd_buff_write(struct ssd *ssd, NvmeRequest *req)
 			r_hp_cnt++; 
 			add_to_heap(ssd, idx); 
 		} 
+		qemu_mutex_unlock(&ssd->maptbl_lock);
 		/* insert ssd request into request table */	
 		/* request table is used to flush data buffer associated with the
  		 * maptbl page */
@@ -1842,6 +1851,7 @@ static uint64_t ssd_buff_write(struct ssd *ssd, NvmeRequest *req)
 		qemu_mutex_unlock(&bp->status->lock);
 
 		//ftl_log("host_rq_cnt: %d\n", ++host_rq_cnt);
+		qemu_mutex_lock(&ssd->maptbl_lock);
 		/* update mapping table entry to point to buffer address */ 
 		ppa = get_maptbl_ent(ssd, lpn); 
 
@@ -1856,6 +1866,7 @@ static uint64_t ssd_buff_write(struct ssd *ssd, NvmeRequest *req)
 		/* update maptbl entry with buffer address */
 		set_maptbl_ent_with_buff(ssd, lpn, nn); 
 
+		qemu_mutex_unlock(&ssd->maptbl_lock);
 		//usleep(10);
 #ifdef CHECK_DPG
 		check_dpg_maptbl_ent(ssd, idx);
@@ -2025,6 +2036,7 @@ static uint64_t ssd_buff_write(struct ssd *ssd, NvmeRequest *req)
 		qemu_mutex_unlock(&bp->status->lock);
 		bp->bp_reqs++;
 	
+		qemu_mutex_lock(&ssd->maptbl_lock);
 		/* update mapping table entry to point to buffer address */ 
 		ppa = get_maptbl_ent(ssd, lpn); 
 
@@ -2037,6 +2049,7 @@ static uint64_t ssd_buff_write(struct ssd *ssd, NvmeRequest *req)
 
 		/* update maptbl entry with buffer address */
 		set_maptbl_ent_with_buff(ssd, lpn, nn);	
+		qemu_mutex_unlock(&ssd->maptbl_lock);
 
 		/* flush data buffer */ 
 #if 1 
@@ -2173,6 +2186,7 @@ static void calc_delay_maptbl_flush(struct ssd *ssd)
 	uint64_t now, stime; 
 
 	for (int i = 0; i < 64; i++) { 
+		qemu_mutex_lock(&ssd->maptbl_lock);
 		/* sanghyeon fixed */ 
 #if 0
 		while (should_gc_high(ssd)) { 
@@ -2220,6 +2234,7 @@ static void calc_delay_maptbl_flush(struct ssd *ssd)
 		free(tmp);
 
 		tt_flush_mpgs++;
+		qemu_mutex_unlock(&ssd->maptbl_lock);
 	}
 #if 0	
 	if (should_gc(ssd)) { 

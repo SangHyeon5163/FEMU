@@ -370,6 +370,8 @@ struct ssd {
     bool *dataplane_started_ptr;
     QemuThread ftl_thread;
     QemuThread ftl_flush_thread; 
+
+	QemuMutex maptbl_lock; 
 };
 
 #if 0 //NAM
