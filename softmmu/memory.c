@@ -486,6 +486,7 @@ static MemTxResult memory_region_write_accessor(MemoryRegion *mr,
         trace_memory_region_subpage_write(get_cpu_index(), mr, addr, tmp, size);
     } else if (trace_event_get_state_backends(TRACE_MEMORY_REGION_OPS_WRITE)) {
         hwaddr abs_addr = memory_region_to_absolute_addr(mr, addr);
+		//qemu_printf("addr: %ld, %#lx / abs_addr: %ld, %#lx\n", addr, addr, abs_addr, abs_addr); 
         trace_memory_region_ops_write(get_cpu_index(), mr, abs_addr, tmp, size);
     }
     mr->ops->write(mr->opaque, addr, tmp, size);
@@ -1307,6 +1308,7 @@ static uint64_t memory_region_ram_device_read(void *opaque,
     MemoryRegion *mr = opaque;
     uint64_t data = (uint64_t)~0;
 
+	//printf("addr: %ld\n", addr);
     switch (size) {
     case 1:
         data = *(uint8_t *)(mr->ram_block->host + addr);

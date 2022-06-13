@@ -2799,6 +2799,7 @@ static MemTxResult flatview_write(FlatView *fv, hwaddr addr, MemTxAttrs attrs,
     result = flatview_write_continue(fv, addr, attrs, buf, len,
                                      addr1, l, mr);
 
+	//qemu_printf("flatview addr: %ld %#lx / flatview trans addr: %ld %#lx / len: %ld\n", addr, addr, addr1, addr1, len); 
     return result;
 }
 
@@ -2897,9 +2898,12 @@ MemTxResult address_space_write(AddressSpace *as, hwaddr addr,
 MemTxResult address_space_rw(AddressSpace *as, hwaddr addr, MemTxAttrs attrs,
                              void *buf, hwaddr len, bool is_write)
 {
+	//qemu_printf("physmem addr: %ld, %#lx\n", addr, addr);
     if (is_write) {
+		//qemu_printf("MemWrite, %#lx, %ld\n", addr, len); 
         return address_space_write(as, addr, attrs, buf, len);
     } else {
+		//qemu_printf("MemRead, %#lx, %ld\n", addr, len);
         return address_space_read_full(as, addr, attrs, buf, len);
     }
 }

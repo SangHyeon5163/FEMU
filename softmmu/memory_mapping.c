@@ -92,6 +92,7 @@ static inline void mapping_merge(MemoryMapping *map,
                                  hwaddr virt_addr,
                                  ram_addr_t length)
 {
+	//printf("check..\n");
     if (virt_addr < map->virt_addr) {
         map->length += map->virt_addr - virt_addr;
         map->virt_addr = virt_addr;
